@@ -99,6 +99,10 @@ Exports use the app's JSON layout (`device_name` `PD200XW`, `blnMixture`,
 straight into "Maono Link" (and vice versa). `--force` accepts a profile that
 was exported for a different device name.
 
+Verified on hardware: the scene/band writes round-trip unchanged, and
+`--eq-status` reads the mode word, the reverb registers and all seven EQ
+slots back from the device.
+
 ### Device access
 
 `/dev/hidraw*` nodes are root-only by default. Either run with `sudo` or add a

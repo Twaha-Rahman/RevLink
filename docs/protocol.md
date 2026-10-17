@@ -338,11 +338,11 @@ Checksum template for arbitrary key `K` single read:
 8. Semantics of UI messages `0x05`/`0x06`/`0x07` (wire keys
    `0x207d`/`0x207e`/`0x207f`) and `0x22` unresolved — likely unrelated to
    battery/lighting/EQ (possibly mic gain or loop-panel controls).
-9. **Scene/EQ registers (§10)** — reconstructed from the app's EQ code; not
-   yet verified on hardware. To confirm: whether the device answers cmd-4
-   reads of `0x2022`/`0x2082`/`0x2083` and the chunked cmd-6 band reads, the
-   exact trigger for mode-word bit 15, and that `0x2082`/`0x2083` really
-   drive the reverb mix.
+9. **Scene/EQ registers (§10)** — resolved on hardware (§8): the mode word,
+   the reverb registers and all seven band slots (35 values) can be read back
+   with cmd-4 / chunked cmd-6 reads, and written values round-trip unchanged.
+   Still to confirm: the audible effect, the exact trigger for mode-word
+   bit 15 (SevenEQ), and whether `0x2082`/`0x2083` really drive a reverb mix.
 
 ## 7. Evidence index (VAs)
 
@@ -415,6 +415,23 @@ machine where both the wireless RX dongle and the wired USB-C mic were tested:
 * **Lighting (§9)**: the CLI's `--light*` register writes were exercised on
   the same hardware and behaved as documented (LED on/off, brightness, mode,
   preset and custom colors).
+* **Scene/EQ (§10)**: `--eq-status` reads the mode word, the reverb registers
+  and all 35 band registers back without any handshake (cmd-4 for
+  `0x2022`/`0x2082`/`0x2083`, chunked cmd-6 type-6 answers for
+  `0x2023..0x2045`). Applying `--scene podcast` and `--scene original` and
+  reading back returned exactly the written values:
+  ```
+  before:  mode=0x0000  bands 100/500/1000/2000/10000 Hz @ 0 dB  mix 0/level 1     (preset 0)
+  write:   --scene podcast
+  after:   mode=0x0100  scene=podcast(1) preset=podcast1(0)  mixture=0  level=0
+           band1 100 Hz +2.5 dB Q 0.70 · band2 300 Hz −4.05 dB Q 2.00
+           band3 1100 Hz 0 dB Q 0.70 · band4 4880 Hz −3 dB Q 5.00
+           band5 10000 Hz 0 dB Q 0.70 high-shelf · HPF 20 Hz · LPF 20 kHz
+  ```
+  The values found before the first write (mode `0x0000`, bands
+  100/500/1000/2000/10000 Hz flat, `0x2083` = 1) do **not** match the app's
+  embedded Original preset (125/250/500/1000/2000 Hz): the device keeps its
+  own persisted curve until the host overwrites it.
 * Every captured frame satisfied the checksum rule of §3.1.
 
 ## 9. Lighting / RGB control (from the UI code)
@@ -530,7 +547,7 @@ one EQ engine. Applying an entry writes the seven-point PEQ, sets the
 reverb-mix registers and finally selects the scene/preset with the EQ mode
 word. All of it uses the cmd-3 write path; each band is one multi-pair frame.
 
-**[reconstructed from PD200XW.dll; not yet verified on hardware]**
+**[reconstructed from PD200XW.dll; verified on hardware (see §8)]**
 
 ### 10.1 Register map
 

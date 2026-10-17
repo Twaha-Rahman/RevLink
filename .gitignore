@@ -4,3 +4,4 @@ extracted/
 work/
 __pycache__/
 *.pyc
+*.cfg

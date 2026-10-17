@@ -83,8 +83,8 @@ sudo ./maono_battery.py --eq-reg 0x2082=1          # advanced: raw register writ
 `--scene` writes the whole curve (7 slots), the reverb mix and the EQ mode
 word, exactly like the app. Band edits write single slots; the mode word is
 not touched (`--eq-flag 1` sets the "custom curve" bit when combined with
-`--scene`). `--channel 1|2|both` selects the microphone, `--dry-run` prints
-what would be written.
+`--scene`). `--channel 1|2|both` selects the microphone; `--dry-run` prints
+the frames a real run would send and works without device access.
 
 Sound profiles can be shared with the Windows app in its `.cfg` format:
 
@@ -106,13 +106,15 @@ slots back from the device.
 ### Device access
 
 `/dev/hidraw*` nodes are root-only by default. Either run with `sudo` or add a
-udev rule so the logged-in user gets access (one line per product ID):
+udev rule so the logged-in user gets access (one line per product ID; older
+units report VID `31b2` instead of `352f`):
 
 ```
 # /etc/udev/rules.d/70-maono-pd200w.rules
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="352f", ATTRS{idProduct}=="040e", TAG+="uaccess"
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="352f", ATTRS{idProduct}=="040f", TAG+="uaccess"
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="352f", ATTRS{idProduct}=="0410", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="352f", ATTRS{idProduct}=="0411", TAG+="uaccess"
 ```
 
 ### Tests

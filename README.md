@@ -1,4 +1,4 @@
-## RevLink CLI
+## RevLink CLI (For the Maono PD200XW)
 
 RevLink (`revlink.py`) is a dependency-free Python 3 script (stdlib only) that
 shows the battery status of both microphones:

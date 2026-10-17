@@ -3,13 +3,13 @@
 Reverse engineering of the **Maono PD200W** wireless microphone's USB HID
 protocol (as implemented by the Windows "Maono Link" app), with a small Linux
 CLI that shows the live battery status of the microphones (TX1 / TX2) via the
-RX dongle.
+RX dongle and controls the mic's RGB LED ring.
 
 ## Documents
 
 - [`docs/protocol.md`](docs/protocol.md) — reverse-engineered protocol
   reference: HID interface, frame format, commands, key registry, init
-  sequence, and battery handling.
+  sequence, battery handling, and lighting control.
 
 No vendor binaries are tracked in this repository (see `.gitignore`).
 
@@ -34,6 +34,33 @@ a node explicitly).
 
 Verified working on hardware with both the wireless RX dongle (`352f:040e`)
 and the wired USB-C microphone (`352f:0411`).
+
+### Lighting (RGB) control
+
+The mic's LED ring can be configured with `--light*` options; they write to
+the device and exit after printing the frames sent:
+
+```sh
+./maono_battery.py --light-status                  # read back the current LED settings
+sudo ./maono_battery.py --light on                 # LED ring on (also: --light off)
+sudo ./maono_battery.py --light-brightness 40      # 1-100 (affects battery runtime)
+sudo ./maono_battery.py --light-mode breathe       # fixed | breathe | loop
+sudo ./maono_battery.py --light-color red          # red | white orange yellow green cyan blue magenta | 0-7
+sudo ./maono_battery.py --light-color '#3366FF'    # custom color into slot 1
+sudo ./maono_battery.py --light-color '#3366FF' --light-slot 3
+sudo ./maono_battery.py --light on --channel both  # address both mics (default: 1)
+```
+
+`--light-color #RRGGBB` converts RGB to the H/S/V register values the vendor
+app stores (H = hue × 100, S/V = percent) and selects the custom color;
+custom colors live in 5 slots (`--light-slot 1-5`). `--light-hsv H,S,V`
+writes raw register values (escape hatch), `--light-count N` writes the
+stored-color count register (advanced; can hide existing custom colors).
+
+**The lighting protocol is reconstructed from the vendor app's UI code and is
+not yet verified on hardware** (see §9 in `docs/protocol.md`); the writes use
+the same cmd-0x03 frames the app sends. If a setting does not take effect,
+run with `--raw --verbose` and keep the captured traffic.
 
 ### Device access
 

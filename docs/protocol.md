@@ -5,7 +5,8 @@ Findings from static analysis of **Maono Link 4.0.88** (vendor installer
 
 Findings are reconstructed from the shipped binaries; §8 records what live
 hardware testing has since confirmed. Statements that could not be verified
-against hardware are marked **[unverified]**.
+against hardware are marked **[unverified]**. §9 (lighting control) is
+reconstructed from the app's UI code and is **not yet hardware-verified**.
 
 ## 1. Artifacts under analysis
 
@@ -128,12 +129,24 @@ C4 0B 00 00 06 1E 00 10 00 FD FE   ; checksum FD FE = -(C4+0B+06+1E+10)
 
 | Cmd | Meaning | Payload | N |
 |---|---|---|---|
-| `0x03` | ACK / reply | n × (key u16 LE, value u16 LE) at `[5+4i]` | `7 + 4n` |
+| `0x03` | Write pair / ACK-reply | 1 × (key u16 LE, value u16 LE) — single-pair builder used for every app write | 11 |
 | `0x04` | Read | n × key u16 LE at `[5+2i]` | `7 + 2n` |
-| `0x06` | Write | n × (key u16 LE, value u16 LE) at `[5+4i]` | `7 + 4n` |
+| `0x06` | Block read | 1 × (key u16 LE, count u16 LE) — "stream me `count` consecutive u16 values starting at `key`" | 11 |
 
-Special cases:
+Notes:
 
+* `0x03` is the opcode for every value the app writes: UI clicks, companion
+  init writes and auto-ACKs. Layout (`FUN_180064a30`, checksum base `0xFF2E`
+  = −(0xC4+0x0B+0x03)):
+  `C4 0B 00 00 03 K_lo K_hi V_lo V_hi cks_lo cks_hi`
+  e.g. LED ring on ⇒ `C4 0B 00 00 03 89 20 01 00 84 FE`. The device uses the
+  *same* opcode for its ACK / pair reports.
+* `0x06` (`FUN_180064f70`, checksum base `0xFF2B`) has the same 11-byte shape
+  but requests a run of consecutive values, answered with type-`0x06`
+  streaming frames (§3.3). App examples:
+  `C4 0B 00 00 06 1E 00 10 00 FD FE` (16-value serial-number block at
+  `0x1e`) and `C4 0B 00 00 06 8F 20 0F 00 6D FE` (15 values at `0x208f` =
+  five custom colors × H/S/V).
 * Empty read list ⇒ **no frame at all** is sent (builder returns an empty array).
 * Single-key read `0x04` for key `K` is a fixed 9-byte frame:
   `C4 09 00 00 04 K_lo K_hi cks_lo cks_hi`
@@ -152,9 +165,11 @@ Notes:
 
 * The app's `AnalyseRawData` classifies incoming reports by byte 5 for `'K'`
   (0x4B)-prefixed protocols and by byte 4 otherwise, and forwards non-`K`
-  frames with type `0x02`/`0x03`/`0x04` to the product module. Type `0x06`
-  frames are only understood by the DLL parser — in the app's HID path they
-  appear to be unused (device emits pair frames).
+  frames with type `0x02`/`0x03`/`0x04` to the product module.
+* Type `0x06` is the answer to a host block read: `key`, `count`, then
+  `count` consecutive values from `key`. The DLL parses it in the stream
+  splitter `FUN_180065040`; the per-device Analyzer consumes one value per
+  key through its continuous-read slot (`FUN_180069330`).
 * Only frames whose key is in the DLL's registered list are dispatched.
 * Type-6 replay path: `FUN_1800455e0` → `DataPackage` (`FUN_1800644a0`).
 * The DLL auto-replies with an ACK (cmd 3) when it receives the pair
@@ -217,47 +232,53 @@ the CLI does).
 triggered by incoming `0x20b3`/`0x28b3`, by a 1 s single-shot timer after
 connect, and by the window-loading path:
 
-TX1 block (`0x20xx`):
+TX1 block (`0x20xx`; the opcode of each step is annotated):
 
 ```
-if(flag68||flag69) ack(0x2084, 0)
-if(flag67)         ack(0x20af, 2)
-readList 0x207d 0x207e 0x207f
-readList 0x2084 0x2085 0x208e
-readList 0x2089 0x208b 0x208a 0x208c
-write 0x1e = 0x10
-read 0x20af
-write 0x2069 = 0x0a
+cmd3 write 0x2084 = 0          (only when init flag 68/69 set)
+cmd3 write 0x20af = 2          (only when init flag 67 set)
+cmd4 readList 0x207d 0x207e 0x207f
+cmd4 readList 0x2084 0x2085 0x208e
+cmd4 readList 0x2089 0x208b 0x208a 0x208c
+cmd6 blockRead 0x1e,   16 values   (serial number)
+cmd4 read 0x20af
+cmd6 blockRead 0x2069, 10 values
 ```
 
 TX2 block (`0x28xx`, only when a TX2 slot exists):
 
 ```
-ack(0x2884, 0); ack(0x28af, 2)
-readList 0x287d 0x287e 0x287f
-readList 0x2884 0x2885 0x288e
-readList 0x2889 0x288b 0x288a 0x288c
-write 0x2e = 0x10
-read 0x28af
-write 0x2869 = 0x0a
+cmd3 write 0x2884 = 0; cmd3 write 0x28af = 2
+cmd4 readList 0x287d 0x287e 0x287f
+cmd4 readList 0x2884 0x2885 0x288e
+cmd4 readList 0x2889 0x288b 0x288a 0x288c
+cmd6 blockRead 0x2e,   16 values   (serial number)
+cmd4 read 0x28af
+cmd6 blockRead 0x2869, 10 values
 ```
 
 RX block (`0x30xx`, when an RX slot exists):
 
 ```
-if(flag67) ack(0x3088, 2)
-readList 0x307d (slot0==RX only) 0x3090 (slot1==RX only) 0x307e 0x307f
-readList 0x3084 0x3085
-read 0x3091
-readList 0x3093 0x3094     (twice)
-read 0x3088
-read 0x3086
-readList 0x3082 0x3083
+cmd3 write 0x3088 = 2          (only when init flag 67 set)
+cmd4 readList 0x307d (slot0==RX only) 0x3090 (slot1==RX only) 0x307e 0x307f
+cmd4 readList 0x3084 0x3085
+cmd4 read 0x3091
+cmd4 readList 0x3093 0x3094     (twice)
+cmd4 read 0x3088
+cmd4 read 0x3086
+cmd4 readList 0x3082 0x3083
 ```
 
-Common tail: `read 0x46`, one cmd-6 builder call (args unresolved), then a
+Common tail: `cmd4 read 0x46`, `cmd6 blockRead 0x0b, 3 values`, then a
 per-device loop calling `FUN_1800599b0` for each entry in the device map
 (`DataCenter+0x1b8`; entry types: 1 = RX, 2/3 = TX).
+
+An earlier reading of the `0x1e`/`0x2e`/`0x2069`/`0xb` steps as "writes" was
+wrong: those frames come from the **cmd-6 block-read** builder, whose value
+field is a *count* of consecutive values to stream back (16-value serial
+number at `0x1e`/`0x2e`, 10-value block at `0x2069`/`0x2869`, 3 values at
+`0x0b`). Only the `... = N` lines send cmd-3 write pairs.
 
 The app's send path is queued: `FUN_18005b660` pushes a frame onto
 `DataCenter+0x28` and lazily starts a 100 ms TX timer (timeout →
@@ -311,6 +332,15 @@ Checksum template for arbitrary key `K` single read:
 5. Second registered-key list (`0x51, 0x21, 0x1b, 0x1f, 0x53`) unresolved.
 6. **Sibling PIDs** — resolved: `0x040e` (RX dongle) and `0x0411` (USB-C mic)
    both verified working on hardware; `0x040f`/`0x0410` presumed equivalent.
+7. **Lighting registers (§9)** — reconstructed from the app's UI code; the
+   write path (cmd-3 pairs to `0x2089`…`0x209d`) has **not** been exercised
+   against hardware yet. Items to confirm: LED polarity (`1` = on), the
+   `hue × 100` scale for the H register, whether writes need the app's
+   ~100 ms pacing, and how the device behaves for a custom slot index that
+   exceeds its stored color count.
+8. Semantics of UI messages `0x05`/`0x06`/`0x07` (wire keys
+   `0x207d`/`0x207e`/`0x207f`) and `0x22` unresolved — likely unrelated to
+   battery/lighting (possibly RX/mic gain or loop-panel controls).
 
 ## 7. Evidence index (VAs)
 
@@ -336,6 +366,16 @@ UI log strings 0x180084838 (battery1) / 0x180084850 (battery2) /
 0x180084868 (charge1) / 0x180084888 (charge2) ·
 battery stylesheets 0x180082650 (green) / 0x1800828d0 (red).
 
+`PD200XW.dll` — lighting (§9): lighting page ctor 0x180024e10 ·
+LED toggle 0x180029dd0 · mode buttons 0x18002a340 · brightness 0x18002a9e0 ·
+preset colors 0x180029ba0 · custom color sender 0x18002e870 ·
+custom delete/re-layout 0x18001dc80 · "+" color chooser 0x18001e270 ·
+per-mic `Analyzer::slot_FromUI` 0x180069480 · `Analyzer::slot_FromUI` data
+path 0x1800641b0 · per-device registration 0x180069d30 · RX/TX map insert
+0x180068f50 · custom-color count handler 0x180068270 · ×100 encoder
+0x18006d860 / ÷100 0x18006d890 / ×10+2000 0x18006d840 · watched-key list
+0x180067ba0 · wrapper index/type setters 0x1800640c0 / 0x1800640d0.
+
 ## 8. Hardware verification notes (2026-10-17)
 
 Live captures with the project's `maono_battery.py` on Linux `hidraw`, from a
@@ -360,3 +400,108 @@ machine where both the wireless RX dongle and the wired USB-C mic were tested:
   i.e. battery `0x0063` = 99 % (TX1), TX2 = 0 (second mic off/absent), charge
   state `0x0000`.
 * Every captured frame satisfied the checksum rule of §3.1.
+
+## 9. Lighting / RGB control (from the UI code)
+
+The PD200W's LED ring is controlled by the same key/value protocol, using
+per-mic key spaces (`0x20xx` = TX1, `0x28xx` = TX2). The Windows app's
+lighting page emits UI message ids which the per-mic analyzer maps to wire
+keys and sends as cmd-0x03 write pairs
+(`FUN_180069480` → `FUN_180064a30`, §3.2). **[reconstructed, not yet
+verified on hardware]** — the register map below comes from the UI lambdas
+and the analyzer's msg↔key registration, not from captures.
+
+### 9.1 Register map
+
+| Offset | Key (TX1) | UI msg | Meaning | Values |
+|---|---|---|---|---|
+| `+0x89` | `0x2089` | `0x10` | LED ring on/off | `1` = on, `0` = off |
+| `+0x8a` | `0x208a` | `0x11` | Brightness | `1..100` |
+| `+0x8b` | `0x208b` | `0x12` | Effect mode | `0` = fixed, `2` = breathe, `1` = loop |
+| `+0x8c` | `0x208c` | `0x13` | Selected color | `0..7` = presets, `8..12` = custom slots 1..5 |
+| `+0x8d` | `0x208d` | `0x14` | registered key, no UI control found | `?` |
+| `+0x8e` | `0x208e` | `0x15` | Number of stored custom colors | `0..5` |
+| `+0x8f..0x91` | `0x208f..0x2091` | `0x38..0x3a` | Custom color 1: H, S, V | see §9.2 |
+| `+0x92..0x94` | `0x2092..0x2094` | `0x3b..0x3d` | Custom color 2: H, S, V | |
+| `+0x95..0x97` | `0x2095..0x2097` | `0x3e..0x40` | Custom color 3: H, S, V | |
+| `+0x98..0x9a` | `0x2098..0x209a` | `0x41..0x43` | Custom color 4: H, S, V | |
+| `+0x9b..0x9d` | `0x209b..0x209d` | `0x44..0x46` | Custom color 5: H, S, V | |
+
+Preset color index order (same order as the app's color buttons):
+`0` white, `1` red, `2` orange, `3` yellow, `4` green, `5` cyan, `6` blue,
+`7` magenta.
+
+Mode values are *not* the button order: the mode button group ids are
+`0` = 固定 (fixed), `1` = 呼吸 (breathe), `2` = 循环 (loop), and the click
+handler remaps them to wire values `0`, `2`, `1` respectively
+(`FUN_18002a340` — id 1 → Breathe, id 2 → Loop).
+
+The lighting page constructor wires up (`FUN_180024e10`):
+
+* LED toggle (`FUN_180029dd0`): checked state → msg `0x10` (`1`/`0`);
+  when unchecked the page shows an "off" placeholder label (`page+0x38`).
+* Brightness slider (`FUN_18002a9e0`): slider value `1..100` → msg `0x11`.
+* Mode buttons (`FUN_18002a340`): button id → msg `0x12` as above; Loop also
+  shows an extra panel (QLabel at `page+0x40`).
+* Preset color buttons (`FUN_180029ba0`): button objectName `0..7` →
+  msg `0x13`; the chosen `QColor` is cached at `page+0x188`.
+* Custom color buttons (`FUN_18001dc80`): selection sends msg `0x13` with
+  `8 + slot − 1`; adding/deleting a color re-sends the current selection and
+  the new count via msg `0x15`.
+
+### 9.2 Custom color values
+
+Each custom color is stored as three consecutive values (H, S, V). When the
+user picks a color in the chooser, `FUN_18002e870` sends three cmd-3 pairs
+(UI message ids `0x38`/`0x39`/`0x3a`, remapped per slot by tables
+`DAT_18090b3c8`/`DAT_18090b3d0`):
+
+* H comes from `QColor::hue()` (int degrees `0..359`),
+* S comes from `QColor::saturationF()`, V from `QColor::valueF()`
+  (floats `0..1`).
+
+All fifteen custom-color keys are registered in the analyzer's "double,
+×100" value list (`analyzer+0x48`, encoder `FUN_18006d860`), so every value
+is sent as `(u16)(toDouble(v) × 100)`; the read-back path divides by 100
+(`FUN_18006d890`):
+
+* **H = hue × 100** (`0..35900`), i.e. centi-degrees,
+* **S = round(saturationF × 100)** → `0..100`,
+* **V = round(valueF × 100)** → `0..100`.
+
+The device reports its stored custom-color count on key `0x208e`; the host
+then answers with a cmd-6 **block read** of `count × 3` values starting at
+`0x208f` (`FUN_180068270`, e.g. `C4 0B 00 00 06 8F 20 0F 00 6D FE` for five
+colors) and updates the UI from the streamed type-6 values.
+
+### 9.3 Status read-back
+
+The four main registers plus the custom-color count are part of the app's
+connect-time read lists (`cmd4 readList 0x2089 0x208b 0x208a 0x208c` and
+`… 0x208e`, §4), so they can be probed with the same single-key cmd-0x04
+reads the battery CLI uses, e.g.:
+
+```
+request:  C4 09 00 00 04 89 20 ...   (LED on/off)
+request:  C4 09 00 00 04 8B 20 ...   (mode)
+```
+
+`maono_battery.py --light-status` probes `0x2089`, `0x208a`, `0x208b`,
+`0x208c` and `0x208e` this way.
+
+### 9.4 CLI mapping
+
+| CLI option | Wire writes |
+|---|---|
+| `--light on\|off` | `+0x89 = 1\|0` |
+| `--light-brightness N` | `+0x8a = N` (N = 1..100) |
+| `--light-mode fixed\|breathe\|loop` | `+0x8b = 0\|2\|1` |
+| `--light-color NAME\|0-7` | `+0x8c = index` |
+| `--light-color #RRGGBB --light-slot N` | H,S,V to `+0x8f + 3(N−1)`… then `+0x8c = 7 + N` |
+| `--light-hsv H,S,V --light-slot N` | raw H,S,V to the slot (advanced; no selection) |
+| `--light-count N` | `+0x8e = N` (advanced; destructive for existing colors) |
+| `--channel 1\|2\|both` | selects the `0x20xx` / `0x28xx` / both spaces |
+
+Writes are spaced ~50 ms apart (the app queues frames on a ~100 ms timer);
+each write is an 11-byte cmd-3 frame, e.g. LED on ⇒
+`C4 0B 00 00 03 89 20 01 00 84 FE`.

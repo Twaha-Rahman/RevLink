@@ -1,24 +1,3 @@
-# maono-pd200w
-
-Reverse engineering of the **Maono PD200W** wireless microphone's USB HID
-protocol (as implemented by the Windows "Maono Link" app), with **RevLink**, a
-small Linux CLI that shows the live battery status of the microphones (TX1 /
-TX2) via the RX dongle, controls the mic's RGB LED ring and selects the app's
-scene presets and seven-point PEQ.
-
-> **Disclaimer:** this is an unofficial, independent project; it is not
-> affiliated with or endorsed by Maono. "Maono", "Maono Link" and "PD200W"
-> are trademarks of their respective owners, used here only to identify the
-> hardware and the vendor app this project interoperates with.
-
-## Documents
-
-- [`docs/protocol.md`](docs/protocol.md) — reverse-engineered protocol
-  reference: HID interface, frame format, commands, key registry, init
-  sequence, battery handling, lighting control, and scene/PEQ registers.
-
-No vendor binaries are tracked in this repository (see `.gitignore`).
-
 ## RevLink CLI
 
 RevLink (`revlink.py`) is a dependency-free Python 3 script (stdlib only) that
@@ -127,6 +106,28 @@ SUBSYSTEM=="hidraw", ATTRS{idVendor}=="352f", ATTRS{idProduct}=="0411", TAG+="ua
 ```sh
 python3 -m unittest discover -s tests
 ```
+
+## Documents
+
+- [`docs/protocol.md`](docs/protocol.md) — reverse-engineered protocol
+  reference: HID interface, frame format, commands, key registry, init
+  sequence, battery handling, lighting control, and scene/PEQ registers.
+
+No vendor binaries are tracked in this repository (see `.gitignore`).
+
+# Disclaimer
+
+Reverse engineering of the **Maono PD200W** wireless microphone's USB HID
+protocol (as implemented by the Windows "Maono Link" app), with **RevLink**, a
+small Linux CLI that shows the live battery status of the microphones (TX1 /
+TX2) via the RX dongle, controls the mic's RGB LED ring and selects the app's
+scene presets and seven-point PEQ.
+
+> **Disclaimer:** this is an unofficial, independent project; it is not
+> affiliated with or endorsed by Maono. "Maono", "Maono Link" and "PD200W"
+> are trademarks of their respective owners, used here only to identify the
+> hardware and the vendor app this project interoperates with.
+
 
 ## License
 

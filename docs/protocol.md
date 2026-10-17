@@ -3,8 +3,8 @@
 Findings from static analysis of **Maono Link 4.0.88** (vendor installer
 `Maono Link_V4.0.88_0918.exe`) and its extracted components.
 
-No physical device was attached during this analysis; everything below is
-reconstructed from the shipped binaries. Statements that could not be verified
+Findings are reconstructed from the shipped binaries; §8 records what live
+hardware testing has since confirmed. Statements that could not be verified
 against hardware are marked **[unverified]**.
 
 ## 1. Artifacts under analysis
@@ -92,9 +92,9 @@ So the control channel is:
 * Output reports: callers hand hidapi 64/65-byte buffers; hidapi zero-pads to
   `OutputReportByteLength` (65 = 1-byte report ID + 64-byte payload) and writes
   exactly that (`hid_write` @ `0x1400963b0`).
-* Result: on Linux `hidraw` the device is expected to present **64-byte
-  vendor-defined reports**; reads deliver 64 bytes starting with `0xC4`,
-  writes take a 64-byte payload zero-padded as needed. **[unverified on Linux]**
+* Verified on Linux `hidraw` (2026-10-17, see §8): reports are unnumbered
+  **64-byte payloads** starting with `0xC4` (nothing to strip), and 64-byte
+  zero-padded writes are accepted as-is (no report ID prefix needed).
 
 ## 3. Wire protocol (PD200XW.dll)
 
@@ -181,7 +181,8 @@ not resolved. **[unknown]**
 | `0x20b3` / `0x28b3` | dispatcher → `DataCenter::FetchAllInitPamaras(mode 2)` | "Get Ready" from TX1 / TX2; host then runs the full init sequence |
 | `0x2084` / `0x2884` / `0x3084` | parser special-case | when value == 1, DLL replies with an ACK frame |
 | `0x41` | `FUN_180053d70` | (used in mode-1 init; likely also a "ready"/state key) |
-| `0x44, 0x45, 0x46, 0x47` | various | device status/info keys (not battery) |
+| `0x44` | `FUN_180056040` | ~10 Hz streamed meter value: **audio input level** (drives `MainLevelWidget`, the VU meter; strings `refreshLevelWidget`, `-48dB`, `0dB`); stored as param `0x09` with `low byte = TX1, high byte = TX2` |
+| `0x45, 0x46, 0x47` | various | device status/info keys (not battery) |
 | `0x2022` / `0x2822` | inline | TX channel/state handling |
 
 Battery values: both handlers simply store the raw byte. The UI side
@@ -205,8 +206,10 @@ charging state (key `0x49`). Note the two keys are NOT per-device: each key
 carries both TX1 and TX2 data packed into one u16 (low byte = TX1, high byte
 = TX2).
 
-The battery frames are device-initiated (push): `0x42`/`0x49` are registered
-at construction and are never explicitly read by the app.
+`0x42`/`0x49` are registered at construction and are never explicitly read by
+the app. In the live sessions of §8 neither key was pushed spontaneously —
+instead the device answers cmd-4 single-key reads for both keys (which is what
+the CLI does).
 
 ## 4. App init sequence (after "Get Ready")
 
@@ -263,7 +266,8 @@ The app's send path is queued: `FUN_18005b660` pushes a frame onto
 ## 5. What a battery CLI must do (playbook)
 
 1. Find the RX HID node: VID `0x352f` (or `0x31b2`), PID `0x040e`/`0x040f`/`0x0410`
-   (USB-C mic: PID `0x0411`), USB interface 3, vendor collection 1.
+   (USB-C mic: PID `0x0411`, whose vendor collection sits on a different USB
+   interface than the RX's `mi_03`).
    On Linux: `/sys/class/hidraw/hidraw*/device/uevent` `HID_ID=0003:0000352F:0000040E`,
    interface from the USB path (`…:1.3`).
 2. Open the raw node; write 64-byte frames; read 64-byte reports.
@@ -272,11 +276,17 @@ The app's send path is queued: `FUN_18005b660` pushes a frame onto
    * `0x03`/`0x04` → iterate pairs; for key `0x42` print
      `TX1 battery = value & 0xFF`, `TX2 battery = value >> 8`; for key `0x49`
      print the charge states the same way (low byte = TX1, high byte = TX2).
-4. The device pushes battery frames by itself; as a fallback the host can send
-   a single-key read of `0x42` / `0x49`
-   (`C4 09 00 00 04 42 00 ED FE` / `C4 09 00 00 04 49 00 E6 FE`).
-   **[unverified whether the device answers reads for these keys]**
-5. Optional hardening (only if passive listen shows nothing):
+4. Fetch the values with cmd-4 single-key read probes — verified on hardware:
+   the device answers immediately (responses also arrive as type `0x04`):
+   ```
+   request:  C4 09 00 00 04 42 00 ED FE            (padded to 64 bytes)
+   response: C4 0B 00 00 04 42 00 63 00 88 FE      -> value 0x0063 = 99 %
+   request:  C4 09 00 00 04 49 00 E6 FE
+   response: C4 0B 00 00 04 49 00 00 00 E4 FE      -> value 0x0000
+   ```
+   In the observed sessions the device did **not** push `0x42`/`0x49` by
+   itself; it does push the `0x44` level stream continuously.
+5. Optional hardening (was not needed for reads to work):
    * mirror the app's RX init reads (no state-changing writes),
    * auto-ACK `(0x2084|0x2884|0x3084, 1)` pairs with an cmd-3 ACK.
 
@@ -292,14 +302,15 @@ Checksum template for arbitrary key `K` single read:
    state enum values (the UI only special-cases `0`/`1`) and the battery
    value scale.
 2. **Value scale** — assumed 0-100 (%); could be a 0-4 level code.
-3. **Push requirements** — whether the dongle emits `0x42`/`0x49` frames
-   without any host init or only after the "Get Ready" init handshake.
-4. **Linux report-ID behavior** — assumed unnumbered 64-byte reports; to be
-   confirmed by reading the report descriptor (`HIDIOCGRDESC`) on hardware.
+   Hardware observation (§8): 99 and 100 were reported — consistent with %.
+3. **Push requirements** — resolved (§8): in the observed sessions neither the
+   RX dongle nor the wired mic pushed `0x42`/`0x49` spontaneously; both answer
+   cmd-4 reads without any init handshake.
+4. **Linux report-ID behavior** — resolved (§8): unnumbered 64-byte reports;
+   writes need no report ID prefix.
 5. Second registered-key list (`0x51, 0x21, 0x1b, 0x1f, 0x53`) unresolved.
-6. `MaonoDevicesInfo.txt` lists RX siblings `0x040f`/`0x0410`, but the app's
-   path table only spells out `pid_040e`; the others are presumably matched by
-   the same table or by PID-independent VID matching in `AutoConnectDevice`.
+6. **Sibling PIDs** — resolved: `0x040e` (RX dongle) and `0x0411` (USB-C mic)
+   both verified working on hardware; `0x040f`/`0x0410` presumed equivalent.
 
 ## 7. Evidence index (VAs)
 
@@ -315,7 +326,8 @@ PD200W path fragments `vid_352f&pid_040e&mi_03&col01` (`.rdata` ~0x14028b090).
 `PD200XW.dll`:
 frame builders 0x180064a30 / 0x180064940 / 0x180064d70 / 0x180064f70 ·
 incoming parser 0x1800455e0 · stream splitter 0x180065040 ·
-dispatcher 0x1800582f0 · battery 0x180052760 (0x42) and 0x180053550 (0x49) ·
+dispatcher 0x1800582f0 · battery 0x180052760 (0x42), charge 0x180053550 (0x49),
+level 0x180056040 (0x44) ·
 `DataCenter::FetchAllInitPamaras` 0x18004a850 · registered keys 0x18004ff50 ·
 send queue 0x18005b660 · UI property handler 0x180018a70 ·
 battery bar setter 0x18001a970 · charge icon updater 0x18001aaf0 ·
@@ -323,3 +335,28 @@ battery log strings 0x18008c7b0 / 0x18008c7c8 · charge log string 0x18008c7d8 �
 UI log strings 0x180084838 (battery1) / 0x180084850 (battery2) /
 0x180084868 (charge1) / 0x180084888 (charge2) ·
 battery stylesheets 0x180082650 (green) / 0x1800828d0 (red).
+
+## 8. Hardware verification notes (2026-10-17)
+
+Live captures with the project's `maono_battery.py` on Linux `hidraw`, from a
+machine where both the wireless RX dongle and the wired USB-C mic were tested:
+
+* **Both devices speak this protocol**: RX dongle `352f:040e` (vendor
+  collection on USB interface 3) and wired mic `352f:0411` (vendor collection
+  on a different interface).
+* **Report framing** on Linux: 64-byte reports, first byte `0xC4`, no report-ID
+  byte; 64-byte zero-padded writes are accepted as-is and answered.
+* **Device-pushed traffic**: the dongle and the wired mic both stream key
+  `0x44` (param `0x09`, ~10 Hz input-level meter; values fluctuated 0-0x15).
+  On the single-mic setups, the dongle duplicated the level in both bytes
+  (`0x1010`, `0x0808`, …) while the wired mic reported `0x00NN`.
+* **Battery fetch**: cmd-4 single-key reads are answered immediately (type
+  `0x04` pair responses), no init handshake needed and no spontaneous
+  `0x42`/`0x49` pushes observed:
+  ```
+  request:  C4 09 00 00 04 42 00 ED FE          -> response: C4 0B 00 00 04 42 00 63 00 88 FE
+  request:  C4 09 00 00 04 49 00 E6 FE          -> response: C4 0B 00 00 04 49 00 00 00 E4 FE
+  ```
+  i.e. battery `0x0063` = 99 % (TX1), TX2 = 0 (second mic off/absent), charge
+  state `0x0000`.
+* Every captured frame satisfied the checksum rule of §3.1.

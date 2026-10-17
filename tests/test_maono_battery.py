@@ -94,5 +94,32 @@ class StateTests(unittest.TestCase):
         self.assertFalse(state.has_data())
 
 
+class InterfacePathTests(unittest.TestCase):
+    def test_usb_interface_component(self):
+        path = (
+            "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-3/1-3:1.3/"
+            "0003:352F:040E.0003/hidraw/hidraw6"
+        )
+        self.assertEqual(mb.interface_from_path(path), 3)
+
+    def test_hid_instance_dir_is_not_an_interface(self):
+        # ".../0411.0051" must not be read as interface 51.
+        path = (
+            "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2/1-2:1.5/"
+            "0003:352F:0411.0051/hidraw/hidraw6"
+        )
+        self.assertEqual(mb.interface_from_path(path), 5)
+
+    def test_no_interface_component(self):
+        path = "/sys/devices/pci0000:00/0000:00:14.0/usb1/1-2/0003:352F:0411.0051/hidraw/hidraw6"
+        self.assertIsNone(mb.interface_from_path(path))
+
+    def test_multidigit_port_path(self):
+        self.assertEqual(
+            mb.interface_from_path("/sys/devices/x/3-2.1/3-2.1:1.51/hidraw/hidraw9"),
+            51,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

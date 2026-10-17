@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Show the live battery status of Maono PD200W wireless microphones.
+"""Show the battery status of Maono PD200W wireless microphones.
 
-The PD200W RX dongle exposes a vendor HID interface (VID 0x352f, VID 0x31b2
-on older units) carrying a small framed protocol (see docs/protocol.md):
+By default the tool probes once, prints one status line and exits; pass
+``--watch`` to keep running and print updates whenever values change.
+
+The PD200W RX dongle (and the wired USB-C mic, PID 0411) exposes a vendor HID
+interface (VID 0x352f, VID 0x31b2 on older units) carrying a small framed
+protocol (see docs/protocol.md):
 
     C4 | len u16 LE | 00 | cmd | payload... | cks u16 LE
     cks = (0x10000 - sum(frame[0 .. len-3])) & 0xFFFF
@@ -12,13 +16,14 @@ Battery data arrives in key/value pair frames (cmd 0x03/0x04):
   * key 0x42 - battery percentage:  low byte = TX1, high byte = TX2
   * key 0x49 - charge state:        low byte = TX1, high byte = TX2
 
-The frames are pushed by the dongle; this tool also supports active single-key
-read probes (cmd 0x04) in case a passive listen yields nothing.
+The device answers cmd-0x04 single-key read requests for both keys (verified
+on hardware); it also pushes other keys by itself (0x44, a ~10 Hz input-level
+stream).  This tool sends read probes and/or listens passively.
 
 Linux only; stdlib only; talks to /dev/hidraw* directly.
 
 Exit codes: 0 = ok, 1 = error (no device, open/write failure),
-            2 = --once received no battery data, 130 = interrupted.
+            2 = no battery data received, 130 = interrupted.
 """
 
 from __future__ import annotations
@@ -34,7 +39,7 @@ import struct
 import sys
 import time
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 # --- protocol constants (docs/protocol.md) ---------------------------------
 
@@ -53,6 +58,10 @@ USB_VIDS = (0x352F, 0x31B2)
 USB_PIDS_RX = (0x040E, 0x040F, 0x0410)  # PD200W RX dongle
 USB_PIDS_MIC = (0x0411,)                # PD200W USB-C microphone (same protocol)
 REPORT_LEN = 64                         # vendor HID report payload size
+
+# how long a one-shot run keeps reading after the first battery data arrives,
+# waiting for the remaining fields (e.g. the charge-state response)
+_SETTLE = 0.5
 
 
 class DeviceError(Exception):
@@ -136,7 +145,18 @@ def _uevent_fields(dirpath: str) -> dict:
     return fields
 
 
-_USB_INTERFACE_RE = re.compile(r":(\d+)\.(\d+)$")
+# The USB interface directory looks like "1-3:1.3" (bus-port:config.interface).
+# Deliberately not "0003:352F:0411.0051", the per-instance HID device directory
+# whose trailing ".0051" otherwise masquerades as an interface number.
+_USB_INTERFACE_RE = re.compile(r"^\d+-[\d.]+:\d+\.\d+$")
+
+
+def interface_from_path(path: str):
+    """USB interface number extracted from a sysfs device path, or None."""
+    for component in path.split(os.sep):
+        if _USB_INTERFACE_RE.match(component):
+            return int(component.rsplit(".", 1)[1])
+    return None
 
 
 def find_devices() -> list:
@@ -153,17 +173,12 @@ def find_devices() -> list:
             continue
         if bus != 3 or vid not in USB_VIDS or pid not in USB_PIDS_RX + USB_PIDS_MIC:
             continue
-        interface = None
-        for component in os.path.realpath(syspath).split(os.sep):
-            match = _USB_INTERFACE_RE.search(component)
-            if match:
-                interface = int(match.group(2))
         devices.append(
             {
                 "dev": os.path.join("/dev", os.path.basename(syspath)),
                 "vid": vid,
                 "pid": pid,
-                "interface": interface,
+                "interface": interface_from_path(os.path.realpath(syspath)),
                 "name": uevent.get("HID_NAME", ""),
             }
         )
@@ -312,10 +327,11 @@ def open_device(args):
     return fd, device, read_only
 
 
-# --- main loop ----------------------------------------------------------------
+# --- report handling ----------------------------------------------------------
 
 
-def _handle_report(raw: bytes, state: State, args) -> None:
+def _handle_report(raw: bytes, state: State, args) -> bool:
+    """Parse one HID report; return True if battery/charge data was seen."""
     if args.raw:
         print("[raw]", raw.hex(" "), file=sys.stderr)
     data = strip_report_id(raw)
@@ -323,7 +339,7 @@ def _handle_report(raw: bytes, state: State, args) -> None:
     if parsed is None:
         if args.verbose and data[:1] == bytes((MAGIC,)):
             print("[warn] bad frame:", data[:24].hex(" "), file=sys.stderr)
-        return
+        return False
     cmd, payload = parsed
     if cmd in CMD_PAIR_TYPES:
         pairs = parse_pairs(payload)
@@ -331,18 +347,27 @@ def _handle_report(raw: bytes, state: State, args) -> None:
             rendered = ", ".join(f"{key:#06x}={value:#06x}" for key, value in pairs.items())
             print(f"[frame] type {cmd:#04x}: {rendered}", file=sys.stderr)
         state.update_from_pairs(pairs)
-    elif args.verbose:
+        return KEY_BATTERY in pairs or KEY_CHARGE in pairs
+    if args.verbose:
         print(f"[frame] type {cmd:#04x} payload={payload.hex(' ')}", file=sys.stderr)
+    return False
+
+
+# --- main loop ----------------------------------------------------------------
 
 
 def run_session(args, fd: int, device: dict, read_only: bool) -> int:
     print(f"[info] using {describe(device)}", file=sys.stderr)
     state = State()
-    last_key = None
     started = time.monotonic()
+    watch = args.watch
     probing = (not args.no_probe) and (not read_only)
-    next_probe = started if args.once else started + args.probe_after
-    deadline = started + args.wait if args.once else None
+    deadline = None if watch else started + args.wait
+    # one-shot probes immediately; --watch listens first (pushes win over probes)
+    next_probe = started + (args.probe_after if watch else 0.0)
+    last_battery_at = None
+    first_data_at = None
+    last_key = None
 
     while True:
         now = time.monotonic()
@@ -361,45 +386,58 @@ def run_session(args, fd: int, device: dict, read_only: bool) -> int:
                         f"{device['dev']} disappeared ({exc.strerror})"
                     ) from exc
                 raise
-            if data:
-                _handle_report(data, state, args)
+            if data and _handle_report(data, state, args):
+                last_battery_at = time.monotonic()
 
         now = time.monotonic()
-        if probing and now >= next_probe:
+        recent = last_battery_at is not None and (now - last_battery_at) < args.interval
+        if probing and now >= next_probe and not recent:
             _send_probe(fd, args)
             next_probe = now + args.interval
 
-        key = state.snapshot()
-        if key != last_key and state.has_data():
-            print_status(state, args.json)
-            last_key = key
-
-    if args.once:
         if state.has_data():
-            return 0
-        print(
-            "no battery data received (try --raw to inspect traffic)",
-            file=sys.stderr,
-        )
-        return 2
-    return 0
+            if first_data_at is None:
+                first_data_at = now
+            if watch:
+                key = state.snapshot()
+                if key != last_key:
+                    print_status(state, args.json)
+                    last_key = key
+            else:
+                have_both = state.tx1_batt is not None and state.tx1_chg is not None
+                if have_both or (now - first_data_at) >= _SETTLE:
+                    break
+
+    if watch:
+        return 0
+    if state.has_data():
+        print_status(state, args.json)
+        return 0
+    print(
+        "no battery data received (needs write access for probes? try sudo; "
+        "or use --raw to inspect traffic)",
+        file=sys.stderr,
+    )
+    return 2
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         prog="maono_battery",
         description="Show the battery status of Maono PD200W microphones via the RX dongle.",
-        epilog="Battery frames are pushed by the dongle; if nothing arrives, the tool "
-        "starts sending single-key read probes (keys 0x42 and 0x49).",
+        epilog="By default the status is probed once and printed; use --watch for live "
+        "updates. Battery frames are requested with single-key read probes (keys 0x42 "
+        "and 0x49); see docs/protocol.md for the wire format.",
     )
     parser.add_argument("--device", metavar="PATH", help="use this hidraw node (e.g. /dev/hidraw3)")
     parser.add_argument("--list", action="store_true", help="list matching hidraw devices and exit")
-    parser.add_argument("--once", action="store_true", help="probe, wait --wait seconds, print and exit")
-    parser.add_argument("--wait", type=float, default=5.0, metavar="SEC", help="with --once: wait this long for data (default: 5)")
-    parser.add_argument("--no-probe", action="store_true", help="never send anything; only listen for pushes")
-    parser.add_argument("--probe-after", type=float, default=3.0, metavar="SEC", help="listen this long before the first probe (default: 3)")
-    parser.add_argument("--interval", type=float, default=3.0, metavar="SEC", help="interval between probes (default: 3)")
-    parser.add_argument("--report-id", type=int, default=None, metavar="N", help="prepend a HID report ID byte to outgoing frames (try 0 or 1 if writes fail)")
+    parser.add_argument("--watch", action="store_true", help="keep running and print updates (default: probe once, print and exit)")
+    parser.add_argument("--once", action="store_true", help=argparse.SUPPRESS)  # default; kept for compatibility
+    parser.add_argument("--wait", type=float, default=5.0, metavar="SEC", help="one-shot: how long to wait for data (default: 5)")
+    parser.add_argument("--no-probe", action="store_true", help="never send anything; only listen for pushed frames")
+    parser.add_argument("--probe-after", type=float, default=3.0, metavar="SEC", help="with --watch: listen this long before the first probe (default: 3)")
+    parser.add_argument("--interval", type=float, default=3.0, metavar="SEC", help="re-probe interval while no battery data is arriving (default: 3)")
+    parser.add_argument("--report-id", type=int, default=None, metavar="N", help="prepend a HID report ID byte to outgoing frames (usually not needed)")
     parser.add_argument("--raw", action="store_true", help="dump every received report (hex) to stderr")
     parser.add_argument("--json", action="store_true", help="print JSON lines instead of text")
     parser.add_argument("--verbose", action="store_true", help="extra diagnostics to stderr")
@@ -425,7 +463,7 @@ def main(argv=None) -> int:
                 return run_session(args, fd, device, read_only)
             except DeviceLost as exc:
                 print(f"[warn] {exc}", file=sys.stderr)
-                if args.once:
+                if not args.watch:
                     return 1
                 time.sleep(1.0)
             finally:

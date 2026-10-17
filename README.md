@@ -19,15 +19,21 @@ No vendor binaries are tracked in this repository (see `.gitignore`).
 shows the battery status of both microphones:
 
 ```sh
-./maono_battery.py                # live updates (Ctrl+C to quit)
-./maono_battery.py --once --json  # one-shot, machine-readable
+./maono_battery.py                   # one-shot: print the status and exit
+./maono_battery.py --json            # one-shot, machine-readable
+./maono_battery.py --watch           # keep running, print updates on change
+./maono_battery.py --watch --json    # JSON lines
 ./maono_battery.py --raw --verbose   # dump every HID report (debugging)
-./maono_battery.py --list         # show matching hidraw devices
+./maono_battery.py --list            # show matching hidraw devices
 ```
 
-By default it listens for pushed battery frames and, if nothing arrives,
-starts sending single-key read probes every few seconds (`--no-probe`
-disables probing; `--device /dev/hidrawN` picks a node explicitly).
+One-shot mode sends single-key read probes (keys `0x42`/`0x49`) and prints one
+line. With `--watch` it listens first and only re-probes while no battery data
+is arriving (`--no-probe` makes it listen-only; `--device /dev/hidrawN` picks
+a node explicitly).
+
+Verified working on hardware with both the wireless RX dongle (`352f:040e`)
+and the wired USB-C microphone (`352f:0411`).
 
 ### Device access
 

@@ -1,10 +1,10 @@
 # maono-pd200w
 
 Reverse engineering of the **Maono PD200W** wireless microphone's USB HID
-protocol (as implemented by the Windows "Maono Link" app), with a small Linux
-CLI that shows the live battery status of the microphones (TX1 / TX2) via the
-RX dongle, controls the mic's RGB LED ring and selects the app's scene presets
-and seven-point PEQ.
+protocol (as implemented by the Windows "Maono Link" app), with **RevLink**, a
+small Linux CLI that shows the live battery status of the microphones (TX1 /
+TX2) via the RX dongle, controls the mic's RGB LED ring and selects the app's
+scene presets and seven-point PEQ.
 
 ## Documents
 
@@ -14,18 +14,18 @@ and seven-point PEQ.
 
 No vendor binaries are tracked in this repository (see `.gitignore`).
 
-## CLI
+## RevLink CLI
 
-`maono_battery.py` is a dependency-free Python 3 script (stdlib only) that
+RevLink (`revlink.py`) is a dependency-free Python 3 script (stdlib only) that
 shows the battery status of both microphones:
 
 ```sh
-./maono_battery.py                   # one-shot: print the status and exit
-./maono_battery.py --json            # one-shot, machine-readable
-./maono_battery.py --watch           # keep running, print updates on change
-./maono_battery.py --watch --json    # JSON lines
-./maono_battery.py --raw --verbose   # dump every HID report (debugging)
-./maono_battery.py --list            # show matching hidraw devices
+./revlink.py                   # one-shot: print the status and exit
+./revlink.py --json            # one-shot, machine-readable
+./revlink.py --watch           # keep running, print updates on change
+./revlink.py --watch --json    # JSON lines
+./revlink.py --raw --verbose   # dump every HID report (debugging)
+./revlink.py --list            # show matching hidraw devices
 ```
 
 One-shot mode sends single-key read probes (keys `0x42`/`0x49`) and prints one
@@ -42,14 +42,14 @@ The mic's LED ring can be configured with `--light*` options; they write to
 the device and exit after printing the frames sent:
 
 ```sh
-./maono_battery.py --light-status                  # read back the current LED settings
-sudo ./maono_battery.py --light on                 # LED ring on (also: --light off)
-sudo ./maono_battery.py --light-brightness 40      # 1-100 (affects battery runtime)
-sudo ./maono_battery.py --light-mode breathe       # fixed | breathe | loop
-sudo ./maono_battery.py --light-color red          # red | white orange yellow green cyan blue magenta | 0-7
-sudo ./maono_battery.py --light-color '#3366FF'    # custom color into slot 1
-sudo ./maono_battery.py --light-color '#3366FF' --light-slot 3
-sudo ./maono_battery.py --light on --channel both  # address both mics (default: 1)
+./revlink.py --light-status                  # read back the current LED settings
+sudo ./revlink.py --light on                 # LED ring on (also: --light off)
+sudo ./revlink.py --light-brightness 40      # 1-100 (affects battery runtime)
+sudo ./revlink.py --light-mode breathe       # fixed | breathe | loop
+sudo ./revlink.py --light-color red          # red | white orange yellow green cyan blue magenta | 0-7
+sudo ./revlink.py --light-color '#3366FF'    # custom color into slot 1
+sudo ./revlink.py --light-color '#3366FF' --light-slot 3
+sudo ./revlink.py --light on --channel both  # address both mics (default: 1)
 ```
 
 `--light-color #RRGGBB` converts RGB to the H/S/V register values the vendor
@@ -70,14 +70,14 @@ be applied with `--scene`; individual bands, the HPF/LPF and the raw registers
 can be edited with `--eq-*` options:
 
 ```sh
-./maono_battery.py --eq-status                     # read back scene, preset and all seven EQ slots
-sudo ./maono_battery.py --scene game               # apply a scene preset (original|podcast|game|sing)
-sudo ./maono_battery.py --scene sing:1             # preset 1 of that scene (0-based; sing:1 = Folk)
-sudo ./maono_battery.py --eq-preset podcast1       # push one curve without switching the scene
-sudo ./maono_battery.py --eq-band 3 1000 -4 2.5    # band 3: 1 kHz, -4 dB, Q 2.5 (bands 1-5)
-sudo ./maono_battery.py --eq-band 1 200 3 1.5 low-shelf   # optional type: peak | low-shelf | high-shelf
-sudo ./maono_battery.py --eq-hpf 80 --eq-lpf 12000 # high-/low-pass filter (FREQ[:Q], or 'off')
-sudo ./maono_battery.py --eq-reg 0x2082=1          # advanced: raw register write
+./revlink.py --eq-status                     # read back scene, preset and all seven EQ slots
+sudo ./revlink.py --scene game               # apply a scene preset (original|podcast|game|sing)
+sudo ./revlink.py --scene sing:1             # preset 1 of that scene (0-based; sing:1 = Folk)
+sudo ./revlink.py --eq-preset podcast1       # push one curve without switching the scene
+sudo ./revlink.py --eq-band 3 1000 -4 2.5    # band 3: 1 kHz, -4 dB, Q 2.5 (bands 1-5)
+sudo ./revlink.py --eq-band 1 200 3 1.5 low-shelf   # optional type: peak | low-shelf | high-shelf
+sudo ./revlink.py --eq-hpf 80 --eq-lpf 12000 # high-/low-pass filter (FREQ[:Q], or 'off')
+sudo ./revlink.py --eq-reg 0x2082=1          # advanced: raw register write
 ```
 
 `--scene` writes the whole curve (7 slots), the reverb mix and the EQ mode
@@ -89,9 +89,9 @@ the frames a real run would send and works without device access.
 Sound profiles can be shared with the Windows app in its `.cfg` format:
 
 ```sh
-./maono_battery.py --eq-export pop.cfg --eq-preset pop          # works without a device
-./maono_battery.py --eq-export voice.cfg --eq-band 3 1000 -4 2.5 --eq-hpf 80 --eq-name "My Voice"
-sudo ./maono_battery.py --eq-import pop.cfg                     # apply a profile to the mic
+./revlink.py --eq-export pop.cfg --eq-preset pop          # works without a device
+./revlink.py --eq-export voice.cfg --eq-band 3 1000 -4 2.5 --eq-hpf 80 --eq-name "My Voice"
+sudo ./revlink.py --eq-import pop.cfg                     # apply a profile to the mic
 ```
 
 Exports use the app's JSON layout (`device_name` `PD200XW`, `blnMixture`,

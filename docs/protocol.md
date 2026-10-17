@@ -391,8 +391,8 @@ path 0x1800641b0 · per-device registration 0x180069d30 · RX/TX map insert
 
 ## 8. Hardware verification notes (2026-10-17)
 
-Live captures with the project's `maono_battery.py` on Linux `hidraw`, from a
-machine where both the wireless RX dongle and the wired USB-C mic were tested:
+Live captures with RevLink (`revlink.py`) on Linux `hidraw`, from a machine
+where both the wireless RX dongle and the wired USB-C mic were tested:
 
 * **Both devices speak this protocol**: RX dongle `352f:040e` (vendor
   collection on USB interface 3) and wired mic `352f:0411` (vendor collection
@@ -519,7 +519,7 @@ request:  C4 09 00 00 04 89 20 ...   (LED on/off)
 request:  C4 09 00 00 04 8B 20 ...   (mode)
 ```
 
-`maono_battery.py --light-status` probes `0x2089`, `0x208a`, `0x208b`,
+`revlink.py --light-status` probes `0x2089`, `0x208a`, `0x208b`,
 `0x208c` and `0x208e` this way.
 
 ### 9.4 CLI mapping
@@ -676,7 +676,7 @@ strings: `Invalid JSON format for DeviceInfo - not an object`,
 `Missing required fields in DeviceInfo JSON`,
 `请检查并确保您导入的配置文件适用于当前麦克风型号` (foreign `device_name`).
 
-`maono_battery.py --eq-export` writes this format for a built-in preset
+`revlink.py --eq-export` writes this format for a built-in preset
 (`--eq-preset`/`--scene`) or a custom curve built from
 `--eq-band`/`--eq-hpf`/`--eq-lpf`; `--eq-import` parses it and applies the
 curve registers plus `0x2082`/`0x2083`.

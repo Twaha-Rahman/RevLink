@@ -20,7 +20,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import maono_battery as mb
+import revlink as rl
 
 REGISTER_VALUES = {0x2089: 1, 0x208A: 50, 0x208B: 2, 0x208C: 1, 0x208E: 2}
 
@@ -48,20 +48,20 @@ class FakeDevice:
             if not chunk:
                 return
             buffer += chunk
-            while len(buffer) >= mb.REPORT_LEN:
-                record, buffer = buffer[: mb.REPORT_LEN], buffer[mb.REPORT_LEN:]
-                parsed = mb.parse_frame(mb.strip_report_id(record))
+            while len(buffer) >= rl.REPORT_LEN:
+                record, buffer = buffer[: rl.REPORT_LEN], buffer[rl.REPORT_LEN:]
+                parsed = rl.parse_frame(rl.strip_report_id(record))
                 if not parsed:
                     continue
                 cmd, payload = parsed
-                if cmd == mb.CMD_WRITE:
+                if cmd == rl.CMD_WRITE:
                     self.writes.append(struct.unpack("<HH", payload))
-                elif cmd == mb.CMD_READ:
+                elif cmd == rl.CMD_READ:
                     key = struct.unpack("<H", payload)[0]
                     if key in REGISTER_VALUES:
-                        reply = mb.build_frame(
-                            mb.CMD_READ, struct.pack("<HH", key, REGISTER_VALUES[key])
-                        ).ljust(mb.REPORT_LEN, b"\x00")
+                        reply = rl.build_frame(
+                            rl.CMD_READ, struct.pack("<HH", key, REGISTER_VALUES[key])
+                        ).ljust(rl.REPORT_LEN, b"\x00")
                         self.peer.sendall(reply)
 
     def open_device(self, args):
@@ -82,22 +82,22 @@ class FakeDevice:
 class LightingSimulationTests(unittest.TestCase):
     def setUp(self):
         self.fake = FakeDevice()
-        self._open_device = mb.open_device
-        self._describe = mb.describe
-        mb.open_device = self.fake.open_device
-        mb.describe = lambda device: "fake device"
+        self._open_device = rl.open_device
+        self._describe = rl.describe
+        rl.open_device = self.fake.open_device
+        rl.describe = lambda device: "fake device"
 
     def tearDown(self):
-        mb.open_device = self._open_device
-        mb.describe = self._describe
+        rl.open_device = self._open_device
+        rl.describe = self._describe
         self.fake.close()
 
     def test_writes_led_and_custom_color_both_channels(self):
-        args = mb.parse_args(
+        args = rl.parse_args(
             ["--light", "on", "--light-color", "#00ff00", "--light-slot", "2", "--channel", "both"]
         )
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(mb.run_lighting(args), 0)
+            self.assertEqual(rl.run_lighting(args), 0)
         self.fake.wait_for_writes(10)
         self.assertEqual(
             self.fake.writes,
@@ -111,20 +111,20 @@ class LightingSimulationTests(unittest.TestCase):
         )
 
     def test_status_read_back_text(self):
-        args = mb.parse_args(["--light-status", "--wait", "2"])
+        args = rl.parse_args(["--light-status", "--wait", "2"])
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(mb.run_lighting(args), 0)
+            self.assertEqual(rl.run_lighting(args), 0)
         self.assertIn(
             "TX1  led=on  brightness=50  mode=breathe  color=red(1)  custom_count=2",
             out.getvalue(),
         )
 
     def test_status_read_back_json(self):
-        args = mb.parse_args(["--light-status", "--json", "--wait", "2"])
+        args = rl.parse_args(["--light-status", "--json", "--wait", "2"])
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(mb.run_lighting(args), 0)
+            self.assertEqual(rl.run_lighting(args), 0)
         payload = json.loads(out.getvalue().strip().splitlines()[-1])
         self.assertEqual(payload["tx1"]["led"], 1)
         self.assertEqual(payload["tx1"]["mode"], 2)

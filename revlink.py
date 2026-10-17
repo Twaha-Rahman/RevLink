@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Battery status, RGB lighting and scene/PEQ control for Maono PD200W mics.
+"""RevLink — battery status, RGB lighting and scene/PEQ control for Maono PD200W mics.
 
 By default the tool probes the battery once, prints one status line and exits;
 pass ``--watch`` to keep running and print updates whenever values change.
@@ -1583,7 +1583,7 @@ def _validate_eq(parser, args) -> None:
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        prog="maono_battery",
+        prog="revlink",
         description="Battery status, RGB lighting and scene/PEQ control for Maono PD200W "
         "microphones (via the RX dongle or the wired USB-C mic).",
         epilog="Without --light*/--eq* options the battery status is probed once and printed; "

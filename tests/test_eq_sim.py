@@ -22,7 +22,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import maono_battery as mb
+import revlink as rl
 
 # Mode register of TX1: podcast scene, preset 1 (Podcast2), preset flag.
 MODE_TX1 = 0x0101
@@ -32,9 +32,9 @@ MODE_TX2 = 0x0200
 def curve_registers(curve):
     """The 35 register values of one curve, keyed by offset from EQ_BAND_OFF."""
     tables = {}
-    for slot, freq, gain, q, ftype in mb.curve_slots(curve):
-        base = mb.EQ_BAND_OFF + slot * mb.EQ_REGS_PER_SLOT
-        for index, value in enumerate(mb.eq_slot_values(freq, gain, q, ftype)):
+    for slot, freq, gain, q, ftype in rl.curve_slots(curve):
+        base = rl.EQ_BAND_OFF + slot * rl.EQ_REGS_PER_SLOT
+        for index, value in enumerate(rl.eq_slot_values(freq, gain, q, ftype)):
             tables[base + index] = value
     return tables
 
@@ -47,14 +47,14 @@ class FakeDevice:
         self.writes = []  # flat [(key, value), ...] in send order
         self.frames = []  # one [(key, value), ...] list per cmd-0x03 frame
         self.registers = {}
-        for offset, value in curve_registers(mb.EQ_PRESETS["original"]).items():
+        for offset, value in curve_registers(rl.EQ_PRESETS["original"]).items():
             self.registers[0x2000 + offset] = value
-        self.registers[0x2000 + mb.EQ_MODE_OFF] = MODE_TX1
-        self.registers[0x2000 + mb.EQ_MIXTURE_OFF] = 0
-        self.registers[0x2000 + mb.EQ_LEVEL_OFF] = 0
-        self.registers[0x2800 + mb.EQ_MODE_OFF] = MODE_TX2
-        self.registers[0x2800 + mb.EQ_MIXTURE_OFF] = 1
-        self.registers[0x2800 + mb.EQ_LEVEL_OFF] = 5
+        self.registers[0x2000 + rl.EQ_MODE_OFF] = MODE_TX1
+        self.registers[0x2000 + rl.EQ_MIXTURE_OFF] = 0
+        self.registers[0x2000 + rl.EQ_LEVEL_OFF] = 0
+        self.registers[0x2800 + rl.EQ_MODE_OFF] = MODE_TX2
+        self.registers[0x2800 + rl.EQ_MIXTURE_OFF] = 1
+        self.registers[0x2800 + rl.EQ_LEVEL_OFF] = 5
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
@@ -72,26 +72,26 @@ class FakeDevice:
             if not chunk:
                 return
             buffer += chunk
-            while len(buffer) >= mb.REPORT_LEN:
-                record, buffer = buffer[: mb.REPORT_LEN], buffer[mb.REPORT_LEN:]
-                parsed = mb.parse_frame(mb.strip_report_id(record))
+            while len(buffer) >= rl.REPORT_LEN:
+                record, buffer = buffer[: rl.REPORT_LEN], buffer[rl.REPORT_LEN:]
+                parsed = rl.parse_frame(rl.strip_report_id(record))
                 if not parsed:
                     continue
                 cmd, payload = parsed
-                if cmd == mb.CMD_WRITE:
+                if cmd == rl.CMD_WRITE:
                     values = struct.unpack("<" + "HH" * (len(payload) // 4), payload)
                     pairs = list(zip(values[0::2], values[1::2]))
                     self.frames.append(pairs)
                     self.writes.extend(pairs)
-                elif cmd == mb.CMD_READ:
+                elif cmd == rl.CMD_READ:
                     key = struct.unpack("<H", payload)[0]
                     if key in self.registers:
                         self.peer.sendall(
-                            mb.build_frame(
-                                mb.CMD_READ, struct.pack("<HH", key, self.registers[key])
-                            ).ljust(mb.REPORT_LEN, b"\x00")
+                            rl.build_frame(
+                                rl.CMD_READ, struct.pack("<HH", key, self.registers[key])
+                            ).ljust(rl.REPORT_LEN, b"\x00")
                         )
-                elif cmd == mb.CMD_READ_BLOCK:
+                elif cmd == rl.CMD_READ_BLOCK:
                     key, count = struct.unpack("<HH", payload[:4])
                     # Type-6 answers: key, count, then the values; each answer
                     # must fit one 64-byte report, so it is chunked like the app.
@@ -101,7 +101,7 @@ class FakeDevice:
                         body = struct.pack("<HH", key + start, len(chunk))
                         body += b"".join(struct.pack("<H", value) for value in chunk)
                         self.peer.sendall(
-                            mb.build_frame(mb.CMD_READ_BLOCK, body).ljust(mb.REPORT_LEN, b"\x00")
+                            rl.build_frame(rl.CMD_READ_BLOCK, body).ljust(rl.REPORT_LEN, b"\x00")
                         )
 
     def open_device(self, args):
@@ -122,24 +122,24 @@ class FakeDevice:
 class EqSimulationTests(unittest.TestCase):
     def setUp(self):
         self.fake = FakeDevice()
-        self._open_device = mb.open_device
-        self._describe = mb.describe
-        self._spacing = mb.EQ_WRITE_SPACING
-        mb.open_device = self.fake.open_device
-        mb.describe = lambda device: "fake device"
-        mb.EQ_WRITE_SPACING = 0.0
+        self._open_device = rl.open_device
+        self._describe = rl.describe
+        self._spacing = rl.EQ_WRITE_SPACING
+        rl.open_device = self.fake.open_device
+        rl.describe = lambda device: "fake device"
+        rl.EQ_WRITE_SPACING = 0.0
 
     def tearDown(self):
-        mb.open_device = self._open_device
-        mb.describe = self._describe
-        mb.EQ_WRITE_SPACING = self._spacing
+        rl.open_device = self._open_device
+        rl.describe = self._describe
+        rl.EQ_WRITE_SPACING = self._spacing
         self.fake.close()
 
     def _run(self, argv):
-        args = mb.parse_args(argv)
+        args = rl.parse_args(argv)
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            code = mb.run_eq(args)
+            code = rl.run_eq(args)
         return code, out.getvalue()
 
     def test_scene_apply_writes_bands_mix_and_mode(self):
@@ -209,7 +209,7 @@ class EqSimulationTests(unittest.TestCase):
         self.assertEqual(payload["tx2"]["level"], 5)
 
     def test_eq_import_applies_profile(self):
-        args = mb.parse_args(
+        args = rl.parse_args(
             [
                 "--eq-export",
                 "unused.cfg",
@@ -224,9 +224,9 @@ class EqSimulationTests(unittest.TestCase):
                 "2",
             ]
         )
-        curve, name, mixture, level, default = mb.curve_from_args(args)
+        curve, name, mixture, level, default = rl.curve_from_args(args)
         with tempfile.NamedTemporaryFile("w", suffix=".cfg", delete=False) as handle:
-            handle.write(mb.cfg_text(name, curve, mixture, level, default))
+            handle.write(rl.cfg_text(name, curve, mixture, level, default))
             path = handle.name
         self.addCleanup(os.unlink, path)
         code, _ = self._run(["--eq-import", path, "--wait", "2"])
@@ -245,33 +245,33 @@ class EqSimulationTests(unittest.TestCase):
             "blnMixture": False,
             "level": 0,
             "InfoName": "Weird",
-            "curve_contains": mb.curve_json_text(mb.EQ_PRESETS["original"]),
+            "curve_contains": rl.curve_json_text(rl.EQ_PRESETS["original"]),
             "blnDefault": False,
         }
         with tempfile.NamedTemporaryFile("w", suffix=".cfg", delete=False) as handle:
             json.dump(doc, handle)
             path = handle.name
         self.addCleanup(os.unlink, path)
-        args = mb.parse_args(["--eq-import", path])
-        with self.assertRaises(mb.ConfigError):
+        args = rl.parse_args(["--eq-import", path])
+        with self.assertRaises(rl.ConfigError):
             with contextlib.redirect_stderr(io.StringIO()):
-                mb.run_eq(args)
+                rl.run_eq(args)
         # --force accepts the profile; --dry-run keeps the device untouched
-        args = mb.parse_args(["--eq-import", path, "--force", "--dry-run", "--wait", "1"])
+        args = rl.parse_args(["--eq-import", path, "--force", "--dry-run", "--wait", "1"])
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(mb.run_eq(args), 0)
+            self.assertEqual(rl.run_eq(args), 0)
         self.assertIn("dry-run 0x2023", out.getvalue())
 
     def test_eq_export_writes_cfg_without_device(self):
         path = tempfile.mktemp(suffix=".cfg")
         self.addCleanup(lambda: os.path.exists(path) and os.unlink(path))
-        args = mb.parse_args(["--eq-export", path, "--eq-preset", "pop"])
+        args = rl.parse_args(["--eq-export", path, "--eq-preset", "pop"])
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            self.assertEqual(mb.run_eq_export(args), 0)
+            self.assertEqual(rl.run_eq_export(args), 0)
         self.assertIn("exported 'Pop'", out.getvalue())
-        item = mb.load_cfg(path)
+        item = rl.load_cfg(path)
         self.assertEqual(item["name"], "Pop")
         self.assertEqual((item["mixture"], item["level"]), (1, 5))
 

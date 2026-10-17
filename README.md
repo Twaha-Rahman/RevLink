@@ -6,6 +6,11 @@ small Linux CLI that shows the live battery status of the microphones (TX1 /
 TX2) via the RX dongle, controls the mic's RGB LED ring and selects the app's
 scene presets and seven-point PEQ.
 
+> **Disclaimer:** this is an unofficial, independent project; it is not
+> affiliated with or endorsed by Maono. "Maono", "Maono Link" and "PD200W"
+> are trademarks of their respective owners, used here only to identify the
+> hardware and the vendor app this project interoperates with.
+
 ## Documents
 
 - [`docs/protocol.md`](docs/protocol.md) — reverse-engineered protocol

@@ -96,7 +96,7 @@ class LightingSimulationTests(unittest.TestCase):
         args = mb.parse_args(
             ["--light", "on", "--light-color", "#00ff00", "--light-slot", "2", "--channel", "both"]
         )
-        with contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(mb.run_lighting(args), 0)
         self.fake.wait_for_writes(10)
         self.assertEqual(
@@ -113,7 +113,7 @@ class LightingSimulationTests(unittest.TestCase):
     def test_status_read_back_text(self):
         args = mb.parse_args(["--light-status", "--wait", "2"])
         out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(mb.run_lighting(args), 0)
         self.assertIn(
             "TX1  led=on  brightness=50  mode=breathe  color=red(1)  custom_count=2",
@@ -123,7 +123,7 @@ class LightingSimulationTests(unittest.TestCase):
     def test_status_read_back_json(self):
         args = mb.parse_args(["--light-status", "--json", "--wait", "2"])
         out = io.StringIO()
-        with contextlib.redirect_stdout(out):
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(mb.run_lighting(args), 0)
         payload = json.loads(out.getvalue().strip().splitlines()[-1])
         self.assertEqual(payload["tx1"]["led"], 1)

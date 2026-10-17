@@ -3,13 +3,14 @@
 Reverse engineering of the **Maono PD200W** wireless microphone's USB HID
 protocol (as implemented by the Windows "Maono Link" app), with a small Linux
 CLI that shows the live battery status of the microphones (TX1 / TX2) via the
-RX dongle and controls the mic's RGB LED ring.
+RX dongle, controls the mic's RGB LED ring and selects the app's scene presets
+and seven-point PEQ.
 
 ## Documents
 
 - [`docs/protocol.md`](docs/protocol.md) — reverse-engineered protocol
   reference: HID interface, frame format, commands, key registry, init
-  sequence, battery handling, and lighting control.
+  sequence, battery handling, lighting control, and scene/PEQ registers.
 
 No vendor binaries are tracked in this repository (see `.gitignore`).
 
@@ -57,10 +58,46 @@ custom colors live in 5 slots (`--light-slot 1-5`). `--light-hsv H,S,V`
 writes raw register values (escape hatch), `--light-count N` writes the
 stored-color count register (advanced; can hide existing custom colors).
 
-**The lighting protocol is reconstructed from the vendor app's UI code and is
-not yet verified on hardware** (see §9 in `docs/protocol.md`); the writes use
-the same cmd-0x03 frames the app sends. If a setting does not take effect,
-run with `--raw --verbose` and keep the captured traffic.
+**The lighting protocol was reconstructed from the vendor app's UI code** (see
+§9 in `docs/protocol.md`) and is hardware-verified: the writes use the same
+cmd-0x03 frames the app sends. If a setting does not take effect, run with
+`--raw --verbose` and keep the captured traffic.
+
+### Scene presets and PEQ
+
+The four app scenes (Original / Podcast / Game / Sing) and their PEQ curves can
+be applied with `--scene`; individual bands, the HPF/LPF and the raw registers
+can be edited with `--eq-*` options:
+
+```sh
+./maono_battery.py --eq-status                     # read back scene, preset and all seven EQ slots
+sudo ./maono_battery.py --scene game               # apply a scene preset (original|podcast|game|sing)
+sudo ./maono_battery.py --scene sing:1             # preset 1 of that scene (0-based; sing:1 = Folk)
+sudo ./maono_battery.py --eq-preset podcast1       # push one curve without switching the scene
+sudo ./maono_battery.py --eq-band 3 1000 -4 2.5    # band 3: 1 kHz, -4 dB, Q 2.5 (bands 1-5)
+sudo ./maono_battery.py --eq-band 1 200 3 1.5 low-shelf   # optional type: peak | low-shelf | high-shelf
+sudo ./maono_battery.py --eq-hpf 80 --eq-lpf 12000 # high-/low-pass filter (FREQ[:Q], or 'off')
+sudo ./maono_battery.py --eq-reg 0x2082=1          # advanced: raw register write
+```
+
+`--scene` writes the whole curve (7 slots), the reverb mix and the EQ mode
+word, exactly like the app. Band edits write single slots; the mode word is
+not touched (`--eq-flag 1` sets the "custom curve" bit when combined with
+`--scene`). `--channel 1|2|both` selects the microphone, `--dry-run` prints
+what would be written.
+
+Sound profiles can be shared with the Windows app in its `.cfg` format:
+
+```sh
+./maono_battery.py --eq-export pop.cfg --eq-preset pop          # works without a device
+./maono_battery.py --eq-export voice.cfg --eq-band 3 1000 -4 2.5 --eq-hpf 80 --eq-name "My Voice"
+sudo ./maono_battery.py --eq-import pop.cfg                     # apply a profile to the mic
+```
+
+Exports use the app's JSON layout (`device_name` `PD200XW`, `blnMixture`,
+`level`, `InfoName`, `curve_contains`, `blnDefault`), so the files import
+straight into "Maono Link" (and vice versa). `--force` accepts a profile that
+was exported for a different device name.
 
 ### Device access
 

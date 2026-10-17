@@ -198,7 +198,7 @@ not resolved. **[unknown]**
 | `0x41` | `FUN_180053d70` | (used in mode-1 init; likely also a "ready"/state key) |
 | `0x44` | `FUN_180056040` | ~10 Hz streamed meter value: **audio input level** (drives `MainLevelWidget`, the VU meter; strings `refreshLevelWidget`, `-48dB`, `0dB`); stored as param `0x09` with `low byte = TX1, high byte = TX2` |
 | `0x45, 0x46, 0x47` | various | device status/info keys (not battery) |
-| `0x2022` / `0x2822` | inline | TX channel/state handling |
+| `0x2022` / `0x2822` | inline | **EQ mode word** (scene `<< 8` \| preset index, bit 15 = custom-curve flag); see §10 |
 
 Battery values: both handlers simply store the raw byte. The UI side
 (verified in `FUN_180018a70`, the per-device widget property-change handler)
@@ -332,15 +332,17 @@ Checksum template for arbitrary key `K` single read:
 5. Second registered-key list (`0x51, 0x21, 0x1b, 0x1f, 0x53`) unresolved.
 6. **Sibling PIDs** — resolved: `0x040e` (RX dongle) and `0x0411` (USB-C mic)
    both verified working on hardware; `0x040f`/`0x0410` presumed equivalent.
-7. **Lighting registers (§9)** — reconstructed from the app's UI code; the
-   write path (cmd-3 pairs to `0x2089`…`0x209d`) has **not** been exercised
-   against hardware yet. Items to confirm: LED polarity (`1` = on), the
-   `hue × 100` scale for the H register, whether writes need the app's
-   ~100 ms pacing, and how the device behaves for a custom slot index that
-   exceeds its stored color count.
+7. **Lighting registers (§9)** — resolved on hardware: the CLI's cmd-3
+   writes (`0x2089`…`0x209d`) were exercised against both mics and behaved as
+   documented (LED polarity, brightness, modes, preset and custom colors).
 8. Semantics of UI messages `0x05`/`0x06`/`0x07` (wire keys
    `0x207d`/`0x207e`/`0x207f`) and `0x22` unresolved — likely unrelated to
-   battery/lighting (possibly RX/mic gain or loop-panel controls).
+   battery/lighting/EQ (possibly mic gain or loop-panel controls).
+9. **Scene/EQ registers (§10)** — reconstructed from the app's EQ code; not
+   yet verified on hardware. To confirm: whether the device answers cmd-4
+   reads of `0x2022`/`0x2082`/`0x2083` and the chunked cmd-6 band reads, the
+   exact trigger for mode-word bit 15, and that `0x2082`/`0x2083` really
+   drive the reverb mix.
 
 ## 7. Evidence index (VAs)
 
@@ -365,6 +367,17 @@ battery log strings 0x18008c7b0 / 0x18008c7c8 · charge log string 0x18008c7d8 �
 UI log strings 0x180084838 (battery1) / 0x180084850 (battery2) /
 0x180084868 (charge1) / 0x180084888 (charge2) ·
 battery stylesheets 0x180082650 (green) / 0x1800828d0 (red).
+
+`PD200XW.dll` — scene/EQ (§10): EQ point→register encoder 0x180045c40 ·
+multi-pair cmd-3 builder 0x180064b00 · mode write 0x18005c580 (plain) /
+0x18005cb40 (with flag + log) · mode read-on-connect 0x18005d1e0 ·
+per-device sync 0x180049450 · scene switch `EQ_SwitchScense` 0x180049fe0 ·
+scene-default installer 0x180046a80 · reverb-mix writers 0x1800464a0
+(`0x2082`) / 0x180046030 (`0x2083`) · selection getter 0x18004c940 ·
+gain/Q encoders 0x18006d840 / 0x18006d860 · frame processor that sets the
+SevenEQ flag 0x1800455e0 · config save 0x18005dfa0 / 0x18006d620 ·
+export/import 0x180048220 / 0x180048830 · DeviceInfo builder 0x18006d190 /
+curve export 0x18004ca30.
 
 `PD200XW.dll` — lighting (§9): lighting page ctor 0x180024e10 ·
 LED toggle 0x180029dd0 · mode buttons 0x18002a340 · brightness 0x18002a9e0 ·
@@ -399,6 +412,9 @@ machine where both the wireless RX dongle and the wired USB-C mic were tested:
   ```
   i.e. battery `0x0063` = 99 % (TX1), TX2 = 0 (second mic off/absent), charge
   state `0x0000`.
+* **Lighting (§9)**: the CLI's `--light*` register writes were exercised on
+  the same hardware and behaved as documented (LED on/off, brightness, mode,
+  preset and custom colors).
 * Every captured frame satisfied the checksum rule of §3.1.
 
 ## 9. Lighting / RGB control (from the UI code)
@@ -407,9 +423,9 @@ The PD200W's LED ring is controlled by the same key/value protocol, using
 per-mic key spaces (`0x20xx` = TX1, `0x28xx` = TX2). The Windows app's
 lighting page emits UI message ids which the per-mic analyzer maps to wire
 keys and sends as cmd-0x03 write pairs
-(`FUN_180069480` → `FUN_180064a30`, §3.2). **[reconstructed, not yet
-verified on hardware]** — the register map below comes from the UI lambdas
-and the analyzer's msg↔key registration, not from captures.
+(`FUN_180069480` → `FUN_180064a30`, §3.2). The register map below comes from
+the UI lambdas and the analyzer's msg↔key registration; it has since been
+exercised on hardware through the CLI (see §8).
 
 ### 9.1 Register map
 
@@ -505,3 +521,163 @@ request:  C4 09 00 00 04 8B 20 ...   (mode)
 Writes are spaced ~50 ms apart (the app queues frames on a ~100 ms timer);
 each write is an 11-byte cmd-3 frame, e.g. LED on ⇒
 `C4 0B 00 00 03 89 20 01 00 84 FE`.
+
+## 10. Scene presets and PEQ (from the EQ/UI code)
+
+The four scene buttons (场景 — 原声 Original / 播客 Podcast / 游戏 Game /
+唱歌 Sing) each expand to a list of sound-config entries (我的场景) driven by
+one EQ engine. Applying an entry writes the seven-point PEQ, sets the
+reverb-mix registers and finally selects the scene/preset with the EQ mode
+word. All of it uses the cmd-3 write path; each band is one multi-pair frame.
+
+**[reconstructed from PD200XW.dll; not yet verified on hardware]**
+
+### 10.1 Register map
+
+| Offset | Key (TX1 / TX2) | Meaning | Values |
+|---|---|---|---|
+| `+0x22` | `0x2022` / `0x2822` | EQ mode word | `scene << 8 \| preset index`; bit 15 = "SevenEQ" custom-curve flag |
+| `+0x23..+0x27` | `0x2023…` | peaking band 1: 5 registers | see §10.2 |
+| `+0x28..+0x2c` | `0x2028…` | peaking band 2 | |
+| `+0x2d..+0x31` | `0x202d…` | peaking band 3 | |
+| `+0x32..+0x36` | `0x2032…` | peaking band 4 | |
+| `+0x37..+0x3b` | `0x2037…` | peaking band 5 | |
+| `+0x3c..+0x40` | `0x203c…` | high-pass filter slot | |
+| `+0x41..+0x45` | `0x2041…` | low-pass filter slot | |
+| `+0x82` | `0x2082` | reverb mix on/off (`blnMixture` item field) | `0`/`1` |
+| `+0x83` | `0x2083` | reverb level (`level` item field) | `0..` (Sing presets: 5 / 1) |
+
+Scene ids: `0` 原声 Original, `1` 播客 Podcast, `2` 游戏 Game, `3` 唱歌 Sing;
+the preset index is the 0-based position inside the scene's config list
+(§10.3). TX2 uses the same offsets in the `0x28xx` space.
+
+### 10.2 Band register encoding
+
+Each of the seven slots carries five consecutive u16 registers (encoder
+`FUN_180045c40`, called once per EQ point; `base = (dev ? 0x2823 : 0x2023) +
+slot × 5`):
+
+| Register | Value |
+|---|---|
+| `+0` | slot enabled: the app always writes `1` |
+| `+1` | device filter type: JSON/AudioEQS type `0` peak → `1`, `1` low-shelf → `0`, `2` high-shelf → `2`, `3` LPF → `3`, `4` HPF → `5` |
+| `+2` | frequency in Hz: `(short)(int)freq` |
+| `+3` | gain: `(int)(gain × 10 + 2000)` (`FUN_18006d840`; `2000` = 0 dB) — forced to `2000` for the HPF/LPF slots and for gains below −12 dB |
+| `+4` | Q: `(int)(Q × 100)` (`FUN_18006d860`) |
+
+The JSON point type also decides the slot: peaking points fill slots 0–4 in
+order, a type-4 (HPF) point goes to slot 5, a type-3 (LPF) point to slot 6.
+
+One slot = one multi-pair cmd-3 frame (`FUN_180064b00`, length `7 + 4×5`), so
+a full curve is seven frames per mic, e.g. band 1 of Original:
+
+```
+C4 1B 00 00 03 23 20 01 00 24 20 01 00 25 20 7D 00 26 20 D0 07 27 20 64 00 ...
+              +0/1    +1/1    +2/125      +3/2000     +4/100
+```
+
+### 10.3 Built-in presets ("我的场景")
+
+The default entries embedded in `PD200XW.dll` (`FUN_180046a80`). Each curve
+is the app's `curve_contains` JSON: five points plus HPF and LPF. `mixture`/
+`level` are the wrapper fields the app writes to `+0x82`/`+0x83` when the
+entry is selected (`FUN_180049450`; its scene-3 special case sets `1/5`).
+
+| Scene | Preset (index) | curve_name | mixture/level | Notes |
+|---|---|---|---|---|
+| original (0) | 0 原声 | Original | 0/0 | flat, HPF/LPF bypassed |
+| podcast (1) | 0 播客1 | Podcast1 | 0/0 | +2.5 dB @100 Hz, −4 dB @300 Hz |
+| podcast (1) | 1 播客2 | Podcast2 | 0/0 | color `255\|93\|239` |
+| game (2) | 0 游戏1 | Game1 | 0/0 | low-shelf @60 Hz, −7.1 dB @10 kHz |
+| game (2) | 1 游戏2 | Game2 | 0/0 | low-shelf −12 dB @70 Hz |
+| sing (3) | 0 流行 | Pop | 1/5 | HPF @63.3 Hz, reverb level 5 |
+| sing (3) | 1 民谣 | Folk | 1/1 | HPF @40.5 Hz, reverb level 1 |
+
+The full JSON of every preset is embedded in `PD200XW.dll` (in English and
+Chinese name variants; the CLI carries the English names, e.g.
+`--eq-preset folk`).
+
+### 10.4 Scene switch / apply sequence
+
+`FUN_18002a4a0` (scene button) → `FUN_180049fe0` (`EQ_SwitchScense`) stores
+the current `(scene, index)` per device, then `FUN_180049450` syncs it: the
+band frames are produced by the AudioEQS point→register encoder
+(`FUN_180045c40`) and queued as multi-pair cmd-3 frames (`FUN_180064b00`),
+the reverb mix is written, then `FUN_18005c580` writes the mode word
+(`FUN_18005cb40` is the logging variant that can set the SevenEQ flag).
+`FUN_180046a80` installs the scene's default entries when the list is empty;
+a 60 ms timer (`FUN_180029fc0`) refreshes the UI afterwards.
+
+On connect the app reads `0x2022`/`0x2822` once (`FUN_18005d1e0`) to restore
+the active scene; it never reads the band registers back — the host always
+pushes all seven slots.
+
+The CLI replicates the write order per mic: (1) seven band frames, (2)
+mixture, (3) level, (4) mode word. `--eq-flag 1` sets bit 15 — the frame
+processor `FUN_1800455e0` sets that flag when EQ band frames are sent, i.e.
+when the working curve has been customised.
+
+### 10.5 Sound profiles (.cfg)
+
+导出 writes and 导入配置 reads a small JSON file (dialog filter
+`配置文件 (*.cfg)`; writer `FUN_18006d190`, builder `FUN_18004ca30`, export
+`FUN_180048220`, import `FUN_180048830`):
+
+```json
+{
+    "InfoName": "Pop",
+    "blnDefault": true,
+    "blnMixture": true,
+    "curve_contains": "{ ...curve JSON... }",
+    "device_name": "PD200XW",
+    "level": 5
+}
+```
+
+`curve_contains` is the curve JSON as a *string*; its `HPF`, `LPF` and
+`map_points` fields are themselves JSON strings (Qt `QJsonDocument` output:
+keys sorted, 4-space indent):
+
+```json
+{
+    "HPF": "{\n    \"Gain\": -1,\n    \"Q\": 1,\n    \"blnBypass\": false,\n    \"frequence\": 63.26942754238026,\n    \"type\": 4\n}",
+    "LPF": "...",
+    "blnBypass": false,
+    "blnDefault": true,
+    "blnVisible": true,
+    "color": "246|180|54",
+    "curve_name": "Pop",
+    "map_points": ["...", "...", "...", "...", "..."],
+    "sample_rate": 48000,
+    "width": 2
+}
+```
+
+Point fields: `frequence` (Hz), `Gain` (dB), `Q`, `type` (`0` peak, `1`
+low-shelf, `2` high-shelf, `3` LPF, `4` HPF), `blnBypass`. Import validation
+strings: `Invalid JSON format for DeviceInfo - not an object`,
+`Missing required fields in DeviceInfo JSON`,
+`请检查并确保您导入的配置文件适用于当前麦克风型号` (foreign `device_name`).
+
+`maono_battery.py --eq-export` writes this format for a built-in preset
+(`--eq-preset`/`--scene`) or a custom curve built from
+`--eq-band`/`--eq-hpf`/`--eq-lpf`; `--eq-import` parses it and applies the
+curve registers plus `0x2082`/`0x2083`.
+
+### 10.6 CLI mapping
+
+| CLI option | Wire writes |
+|---|---|
+| `--scene NAME[:N]` | 7 band frames + `+0x82`/`+0x83` + `+0x22 = scene<<8 \| N` per mic |
+| `--eq-flag 0\|1` | sets/clears bit 15 of the mode word written by `--scene` |
+| `--eq-preset NAME` | 7 band frames + `+0x82`/`+0x83` (mode word untouched) |
+| `--eq-band N FREQ GAIN Q [TYPE]` | one 5-register frame for slot N−1 |
+| `--eq-hpf FREQ[:Q]` / `off` | slot-5 frame (type 5); `off` = neutral 20 Hz |
+| `--eq-lpf FREQ[:Q]` / `off` | slot-6 frame (type 3); `off` = neutral 20 kHz |
+| `--eq-reg KEY=VALUE` | raw single-pair write (no channel remapping) |
+| `--eq-status` | cmd-4 reads of `+0x22`/`+0x82`/`+0x83` + chunked cmd-6 reads of `+0x23..+0x45` (12 values per request; type-6 answers) |
+| `--eq-import FILE` / `--eq-export FILE` | apply / save a `.cfg` profile |
+
+`--channel 1|2|both` selects the `0x20xx`/`0x28xx` key spaces as for
+lighting. The band block read is chunked because a type-6 answer must fit one
+64-byte report (11 + 2×count bytes ⇒ ≤26 values).

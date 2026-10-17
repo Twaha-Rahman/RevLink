@@ -274,7 +274,7 @@ The app's send path is queued: `FUN_18005b660` pushes a frame onto
      print the charge states the same way (low byte = TX1, high byte = TX2).
 4. The device pushes battery frames by itself; as a fallback the host can send
    a single-key read of `0x42` / `0x49`
-   (`C4 09 00 00 04 42 00 ED FE` / `C4 09 00 00 04 49 00 9C FE`).
+   (`C4 09 00 00 04 42 00 ED FE` / `C4 09 00 00 04 49 00 E6 FE`).
    **[unverified whether the device answers reads for these keys]**
 5. Optional hardening (only if passive listen shows nothing):
    * mirror the app's RX init reads (no state-changing writes),

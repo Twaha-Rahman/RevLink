@@ -128,3 +128,8 @@ SUBSYSTEM=="hidraw", ATTRS{idVendor}=="352f", ATTRS{idProduct}=="0411", TAG+="ua
 python3 -m unittest discover -s tests
 ```
 
+## License
+
+[MIT](LICENSE) — this unofficial project is not affiliated with or endorsed by
+Maono; hardware names are trademarks of their respective owners.
+

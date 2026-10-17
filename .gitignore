@@ -1,0 +1,4 @@
+*.exe
+!install_4.0.88.ico
+extracted/
+work/

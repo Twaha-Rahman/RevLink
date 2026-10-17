@@ -441,6 +441,26 @@ class EqProfileTests(unittest.TestCase):
         self.assertTrue(mb.eq_device_needed(mb.parse_args(["--eq-status"])))
         self.assertFalse(mb.eq_device_needed(mb.parse_args([])))
 
+    def test_dry_run_needs_no_device(self):
+        def fail(_args):
+            raise AssertionError("--dry-run must not open the device")
+
+        original = mb.open_device
+        mb.open_device = fail
+        try:
+            for argv in (
+                ["--scene", "game", "--dry-run"],
+                ["--eq-band", "2", "800", "-3", "1.5", "--dry-run"],
+                ["--eq-hpf", "80", "--dry-run"],
+            ):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                    code = mb.main(argv)
+                self.assertEqual(code, 0, argv)
+                self.assertTrue(out.getvalue().startswith("dry-run "), argv)
+        finally:
+            mb.open_device = original
+
     def test_eq_status_record_decodes_mode(self):
         record = mb.eq_status_record({mb.EQ_MODE_OFF: 0x0101, mb.EQ_MIXTURE_OFF: 0, mb.EQ_LEVEL_OFF: 0})
         self.assertEqual(record["scene_name"], "podcast")

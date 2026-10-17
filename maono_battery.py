@@ -537,7 +537,7 @@ def _slot_frame(channel: int, slot: int, freq, gain, q, ftype, label: str) -> li
     return [
         (base + EQ_ENABLE_REG, values[0], f"{label} enable"),
         (base + EQ_TYPE_REG, values[1], f"{label} type={type_name}"),
-        (base + EQ_FREQ_REG, values[2], f"{label} freq={freq}"),
+        (base + EQ_FREQ_REG, values[2], f"{label} freq={values[2]}"),
         (base + EQ_GAIN_REG, values[3], f"{label} gain={gain}dB"),
         (base + EQ_Q_REG, values[4], f"{label} Q={q}"),
     ]
@@ -1305,6 +1305,12 @@ def run_eq_export(args) -> int:
     return 0
 
 
+def run_eq_dry(args) -> int:
+    """Print the scene/EQ writes a real run would send, without opening the device."""
+    print_writes(flatten_frames(plan_eq_frames(args)), args.json, prefix="dry-run ")
+    return 0
+
+
 def run_eq(args) -> int:
     """Apply --scene/--eq* writes and/or read back the scene/EQ state (one-shot)."""
     fd, device, read_only = open_device(args)
@@ -1318,10 +1324,10 @@ def run_eq(args) -> int:
                     "scene/EQ control needs write access to the hidraw node "
                     "(try sudo or add a udev rule; see README)"
                 )
-            frames = plan_eq_frames(args)
             if args.dry_run:
-                print_writes(flatten_frames(frames), args.json, prefix="dry-run ")
+                run_eq_dry(args)
             else:
+                frames = plan_eq_frames(args)
                 for frame in frames:
                     if args.verbose:
                         for key, value, label in frame:
@@ -1714,6 +1720,9 @@ def main(argv=None) -> int:
 
         if args.eq_export is not None and not eq_device_needed(args):
             return run_eq_export(args)
+
+        if args.dry_run and eq_requested(args) and not args.eq_status:
+            return run_eq_dry(args)
 
         if eq_device_needed(args):
             try:

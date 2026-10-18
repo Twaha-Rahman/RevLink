@@ -214,6 +214,102 @@ class LightingTests(unittest.TestCase):
                     rl.parse_args(argv)
 
 
+class NoiseTests(unittest.TestCase):
+    def test_noise_key_spaces(self):
+        self.assertEqual(rl.noise_key(1, rl.NOISE_STATE_OFF), 0x2084)
+        self.assertEqual(rl.noise_key(1, rl.NOISE_LEVEL_OFF), 0x2085)
+        self.assertEqual(rl.noise_key(2, rl.NOISE_LEVEL_OFF), 0x2885)
+
+    def test_noise_write_frames(self):
+        # cmd-3 pairs as the app's "NR" widget sends them (docs/protocol.md §11)
+        self.assertEqual(rl.write_value(0x2084, 1), bytes.fromhex("c40b0000038420010089fe"))
+        self.assertEqual(rl.write_value(0x2085, 0), bytes.fromhex("c40b0000038520000089fe"))
+        self.assertEqual(rl.single_read(0x2084), bytes.fromhex("c40900000484208bfe"))
+
+    def test_plan_noise_basic(self):
+        args = rl.parse_args(["--noise", "on", "--noise-level", "aggressive"])
+        self.assertEqual(
+            rl.plan_noise(args),
+            [(0x2084, 1, "noise=on"), (0x2085, 2, "noise-level=aggressive(2)")],
+        )
+        self.assertEqual(rl.plan_noise(rl.parse_args([])), [])
+        self.assertEqual(
+            rl.plan_noise(rl.parse_args(["--noise", "off"])),
+            [(0x2084, 0, "noise=off")],
+        )
+
+    def test_plan_noise_channels(self):
+        self.assertEqual(
+            rl.plan_noise(rl.parse_args(["--noise-level", "gentle", "--channel", "2"])),
+            [(0x2885, 0, "noise-level=gentle(0)")],
+        )
+        self.assertEqual(
+            rl.plan_noise(rl.parse_args(["--noise", "on", "--channel", "both"])),
+            [(0x2084, 1, "noise=on"), (0x2884, 1, "noise=on")],
+        )
+
+    def test_parse_noise_level(self):
+        self.assertEqual(rl.parse_noise_level("gentle"), 0)
+        self.assertEqual(rl.parse_noise_level("Soft"), 0)
+        self.assertEqual(rl.parse_noise_level("MID"), 1)
+        self.assertEqual(rl.parse_noise_level("balanced"), 1)
+        self.assertEqual(rl.parse_noise_level("strong"), 2)
+        self.assertEqual(rl.parse_noise_level("0"), 0)
+        self.assertEqual(rl.parse_noise_level("2"), 2)
+        self.assertIsNone(rl.parse_noise_level("3"))
+        self.assertIsNone(rl.parse_noise_level("-1"))
+        self.assertIsNone(rl.parse_noise_level("loud"))
+
+    def test_noise_value_names(self):
+        self.assertEqual(rl.noise_value_names(rl.NOISE_STATE_OFF, 1), "on")
+        self.assertEqual(rl.noise_value_names(rl.NOISE_STATE_OFF, 0), "off")
+        self.assertEqual(rl.noise_value_names(rl.NOISE_LEVEL_OFF, 2), "aggressive")
+        self.assertEqual(rl.noise_value_names(rl.NOISE_LEVEL_OFF, 7), "?(7)")
+
+    def test_noise_status_record(self):
+        record = rl.noise_status_record({rl.NOISE_STATE_OFF: 1, rl.NOISE_LEVEL_OFF: 0})
+        self.assertEqual(record["noise"], 1)
+        self.assertEqual(record["noise_name"], "on")
+        self.assertEqual(record["level"], 0)
+        self.assertEqual(record["level_name"], "gentle")
+        self.assertIsNone(rl.noise_status_record({})["noise"])
+        self.assertIsNone(rl.noise_status_record({}).get("noise_name"))
+
+    def test_noise_validation_errors(self):
+        bad_argv = (
+            ["--noise-level", "3"],
+            ["--noise-level", "loud"],
+            ["--noise", "on", "--watch"],
+            ["--noise-status", "--watch"],
+            ["--noise", "on", "--light", "off"],
+            ["--noise-status", "--light-status"],
+            ["--noise", "on", "--scene", "game"],
+            ["--noise-level", "gentle", "--eq-status"],
+        )
+        with contextlib.redirect_stderr(io.StringIO()):
+            for argv in bad_argv:
+                with self.assertRaises(SystemExit, msg=repr(argv)):
+                    rl.parse_args(argv)
+
+    def test_noise_dry_run_needs_no_device(self):
+        def fail(_args):
+            raise AssertionError("--dry-run must not open the device")
+
+        original = rl.open_device
+        rl.open_device = fail
+        try:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                code = rl.main(["--noise", "on", "--noise-level", "gentle", "--dry-run"])
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                out.getvalue().splitlines(),
+                ["dry-run 0x2084 <= 1   noise=on", "dry-run 0x2085 <= 0   noise-level=gentle(0)"],
+            )
+        finally:
+            rl.open_device = original
+
+
 class EqEncodingTests(unittest.TestCase):
     def test_gain_encoding_matches_app(self):
         # FUN_18006d840: (int)(gain * 10 + 2000), truncating toward zero

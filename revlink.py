@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RevLink — battery status, RGB lighting and scene/PEQ control for Maono PD200W mics.
+"""RevLink — battery status, lighting, noise reduction and scene/PEQ control.
 
 By default the tool probes the battery once, prints one status line and exits;
 pass ``--watch`` to keep running and print updates whenever values change.
@@ -9,6 +9,8 @@ current lighting registers.  Scene/EQ options (``--scene``, ``--eq*``) select
 one of the four sound presets or edit the seven-point PEQ (5 bands + HPF/LPF),
 and read the active mode back with ``--eq-status``; ``--eq-export`` /
 ``--eq-import`` share sound profiles in the Windows app's ``.cfg`` format.
+Noise-reduction options (``--noise``, ``--noise-level``, ``--noise-status``)
+drive the mic's three-stage noise canceller.
 
 The PD200W RX dongle (and the wired USB-C mic, PID 0411) exposes a vendor HID
 interface (VID 0x352f, VID 0x31b2 on older units) carrying a small framed
@@ -43,6 +45,16 @@ Scene control follows the same cmd-0x03 path.  See docs/protocol.md §10:
                      slot (enable, type, frequency, gain, Q)
   * reverb mix     - offset 0x82/0x83: enabled/level for the "Sing" presets
 
+Noise reduction follows the app page's "NR" control: cmd-0x03 writes to the same
+per-mic registers (see docs/protocol.md §11):
+
+  * NR on/off      - offset 0x84: 1 = on, 0 = off
+  * NR level       - offset 0x85: 0 = gentle, 1 = balanced, 2 = aggressive
+                     (the app's three noise-cancellation levels)
+
+Unlike the lighting and EQ maps, the noise-reduction registers are taken from
+the app's UI write path but have not been verified on hardware yet.
+
 Linux only; stdlib only; talks to /dev/hidraw* directly.
 
 Exit codes: 0 = ok, 1 = error (no device, open/write failure),
@@ -63,7 +75,7 @@ import struct
 import sys
 import time
 
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 
 # --- protocol constants (docs/protocol.md) ---------------------------------
 
@@ -77,9 +89,10 @@ CMD_PAIR_TYPES = (0x03, 0x04)  # incoming key/value list frames
 KEY_BATTERY = 0x42
 KEY_CHARGE = 0x49
 
+CHANNEL_BASES = {1: 0x2000, 2: 0x2800}  # per-mic key spaces (TX1/TX2)
+
 # --- lighting registers (docs/protocol.md §9) --------------------------------
 
-LIGHT_CHANNEL_BASES = {1: 0x2000, 2: 0x2800}  # per-mic key spaces (TX1/TX2)
 LIGHT_LED_OFF = 0x89           # 1 = LED ring on, 0 = off
 LIGHT_BRIGHTNESS_OFF = 0x8A    # 1..100
 LIGHT_MODE_OFF = 0x8B          # 0 = fixed, 2 = breathe, 1 = loop
@@ -106,6 +119,21 @@ LIGHT_STATUS_FIELDS = {
     LIGHT_CUSTOM_COUNT_OFF: "custom_count",
 }
 LIGHT_WRITE_SPACING = 0.05  # seconds between write frames (the app paces too)
+
+# --- noise reduction registers (docs/protocol.md §11) -------------------------
+
+NOISE_STATE_OFF = 0x84         # 1 = noise reduction on, 0 = off
+NOISE_LEVEL_OFF = 0x85         # 0..2 = gentle / balanced / aggressive
+NOISE_LEVELS = ("gentle", "balanced", "aggressive")   # the app's 轻柔/均衡/激进
+NOISE_LEVEL_ALIASES = {
+    "gentle": 0, "soft": 0, "low": 0,
+    "balanced": 1, "medium": 1, "mid": 1,
+    "aggressive": 2, "strong": 2, "high": 2,
+}
+NOISE_LEVEL_NAMES = {index: name for index, name in enumerate(NOISE_LEVELS)}
+NOISE_STATUS_OFFSETS = (NOISE_STATE_OFF, NOISE_LEVEL_OFF)
+NOISE_STATUS_FIELDS = {NOISE_STATE_OFF: "noise", NOISE_LEVEL_OFF: "level"}
+NOISE_WRITE_SPACING = 0.05  # seconds between write frames (the app paces too)
 
 # --- device matching --------------------------------------------------------
 
@@ -209,7 +237,7 @@ def strip_report_id(data: bytes) -> bytes:
 
 def light_key(channel: int, offset: int) -> int:
     """Wire key of one lighting register for mic 1/2 (0x20xx / 0x28xx spaces)."""
-    return LIGHT_CHANNEL_BASES[channel] + offset
+    return CHANNEL_BASES[channel] + offset
 
 
 def parse_color(text: str):
@@ -299,9 +327,51 @@ def plan_lighting(args) -> list:
     return writes
 
 
-# --- scene / PEQ registers (docs/protocol.md §10) -----------------------------
+# --- noise reduction helpers --------------------------------------------------
 
-EQ_CHANNEL_BASES = {1: 0x2000, 2: 0x2800}   # same key spaces as lighting
+
+def noise_key(channel: int, offset: int) -> int:
+    """Wire key of one noise-reduction register for mic 1/2 (0x20xx / 0x28xx)."""
+    return CHANNEL_BASES[channel] + offset
+
+
+def parse_noise_level(text: str):
+    """Parse a ``--noise-level`` value: a name/alias or the raw 0..2 register value."""
+    value = text.strip().lower()
+    if value in NOISE_LEVEL_ALIASES:
+        return NOISE_LEVEL_ALIASES[value]
+    try:
+        number = int(value, 0)
+    except ValueError:
+        return None
+    return number if 0 <= number <= len(NOISE_LEVELS) - 1 else None
+
+
+def noise_value_names(offset: int, value: int) -> str:
+    """Human-readable rendering of one noise-reduction register value."""
+    if offset == NOISE_STATE_OFF:
+        return "on" if value else "off"
+    return NOISE_LEVEL_NAMES.get(value, f"?({value})")
+
+
+def plan_noise(args) -> list:
+    """Translate parsed ``--noise*`` options into ordered (key, value, label) writes."""
+    channels = (1, 2) if args.channel == "both" else (int(args.channel),)
+    writes = []
+
+    def add(offset, value, label):
+        for channel in channels:
+            writes.append((noise_key(channel, offset), value, label))
+
+    if args.noise is not None:
+        add(NOISE_STATE_OFF, 1 if args.noise == "on" else 0, f"noise={args.noise}")
+    if args.noise_level is not None:
+        name = NOISE_LEVEL_NAMES[args.noise_level]
+        add(NOISE_LEVEL_OFF, args.noise_level, f"noise-level={name}({args.noise_level})")
+    return writes
+
+
+# --- scene / PEQ registers (docs/protocol.md §10) -----------------------------
 
 EQ_MODE_OFF = 0x22        # scene id << 8 | preset index; bit 15 = "SevenEQ" flag
 EQ_BAND_OFF = 0x23        # first of 7 filter slots, 5 registers each
@@ -478,7 +548,7 @@ EQ_PRESETS = {
 
 def eq_key(channel: int, offset: int) -> int:
     """Wire key of one EQ register for mic 1/2 (0x20xx / 0x28xx spaces)."""
-    return EQ_CHANNEL_BASES[channel] + offset
+    return CHANNEL_BASES[channel] + offset
 
 
 def slot_name(slot: int) -> str:
@@ -1001,6 +1071,32 @@ def print_light_status(status: dict, as_json: bool) -> None:
         print(f"TX{channel}  " + "  ".join(parts), flush=True)
 
 
+def noise_status_record(values: dict) -> dict:
+    """Decode one channel's noise-reduction registers into a JSON-friendly dict."""
+    record = {}
+    for offset, name in NOISE_STATUS_FIELDS.items():
+        raw = values.get(offset)
+        record[name] = raw
+        if raw is not None:
+            record[name + "_name"] = noise_value_names(offset, raw)
+    return record
+
+
+def print_noise_status(status: dict, as_json: bool) -> None:
+    if as_json:
+        payload = {"timestamp": time.time()}
+        for channel, values in status.items():
+            payload[f"tx{channel}"] = noise_status_record(values)
+        print(json.dumps(payload), flush=True)
+        return
+    for channel, values in status.items():
+        parts = []
+        for offset, name in NOISE_STATUS_FIELDS.items():
+            raw = values.get(offset)
+            parts.append(f"{name}=" + ("?" if raw is None else noise_value_names(offset, raw)))
+        print(f"TX{channel}  " + "  ".join(parts), flush=True)
+
+
 # --- HID I/O -----------------------------------------------------------------
 
 
@@ -1108,6 +1204,43 @@ def read_light_status(fd: int, args, wait: float, read_only: bool) -> dict:
     status = {}
     for channel in channels:
         wanted[channel] = {light_key(channel, offset): offset for offset in LIGHT_STATUS_OFFSETS}
+        status[channel] = {}
+        if read_only:
+            continue
+        for key in wanted[channel]:
+            if args.verbose:
+                print(f"[probe] single read of key {key:#06x}", file=sys.stderr)
+            send_frame(fd, single_read(key), args.report_id)
+
+    pending = {key for keys in wanted.values() for key in keys}
+    deadline = time.monotonic() + wait
+    while pending and time.monotonic() < deadline:
+        ready, _, _ = select.select([fd], [], [], 0.1)
+        if not ready:
+            continue
+        frame = _recv_frame(fd, args)
+        if frame is None:
+            continue
+        cmd, payload = frame
+        if cmd in CMD_PAIR_TYPES:
+            for key, value in parse_pairs(payload).items():
+                if key in pending:
+                    for channel, keys in wanted.items():
+                        if key in keys:
+                            status[channel][keys[key]] = value
+                    pending.discard(key)
+        elif args.verbose:
+            print(f"[frame] type {cmd:#04x} payload={payload.hex(' ')}", file=sys.stderr)
+    return status
+
+
+def read_noise_status(fd: int, args, wait: float, read_only: bool) -> dict:
+    """Probe the noise-reduction registers; return {channel: {offset: value}}."""
+    channels = (1, 2) if args.channel == "both" else (int(args.channel),)
+    wanted = {}
+    status = {}
+    for channel in channels:
+        wanted[channel] = {noise_key(channel, offset): offset for offset in NOISE_STATUS_OFFSETS}
         status[channel] = {}
         if read_only:
             continue
@@ -1460,6 +1593,31 @@ def _validate_lighting(parser, args) -> None:
         parser.error("--watch only applies to the battery status; drop it for lighting options")
 
 
+def noise_requested(args) -> bool:
+    """True when any --noise* option that writes to the device was given."""
+    return args.noise is not None or args.noise_level is not None
+
+
+def _validate_noise(parser, args) -> None:
+    """Validate and normalize noise-reduction options in place."""
+    if args.watch and (noise_requested(args) or args.noise_status):
+        parser.error("--watch only applies to the battery status; drop it for noise options")
+    if noise_requested(args) or args.noise_status:
+        if lighting_requested(args) or args.light_status:
+            parser.error("noise and lighting options are separate commands; run them one at a time")
+        if eq_requested(args) or args.eq_status:
+            parser.error("noise and scene/EQ options are separate commands; run them one at a time")
+
+    if args.noise_level is not None:
+        level = parse_noise_level(args.noise_level)
+        if level is None:
+            parser.error(
+                "--noise-level must be gentle | balanced | aggressive"
+                " (aliases soft/mid/strong) or a raw 0-2 register value"
+            )
+        args.noise_level = level
+
+
 def _normalize(value):
     value = float(value)
     return int(value) if value.is_integer() else value
@@ -1584,12 +1742,13 @@ def _validate_eq(parser, args) -> None:
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         prog="revlink",
-        description="Battery status, RGB lighting and scene/PEQ control for Maono PD200W "
-        "microphones (via the RX dongle or the wired USB-C mic).",
-        epilog="Without --light*/--eq* options the battery status is probed once and printed; "
-        "use --watch for live updates. Lighting and scene/EQ options write settings and exit; "
-        "use --light-status / --eq-status to read the current settings back, and --eq-export / "
-        "--eq-import to share sound profiles with the Windows app (.cfg). See docs/protocol.md.",
+        description="Battery status, RGB lighting, noise reduction and scene/PEQ control for Maono "
+        "PD200W microphones (via the RX dongle or the wired USB-C mic).",
+        epilog="Without --light*/--noise*/--eq* options the battery status is probed once and printed; "
+        "use --watch for live updates. Lighting, noise and scene/EQ options write settings and exit; "
+        "use --light-status / --noise-status / --eq-status to read the current settings back, and "
+        "--eq-export / --eq-import to share sound profiles with the Windows app (.cfg). "
+        "See docs/protocol.md.",
     )
     parser.add_argument("--device", metavar="PATH", help="use this hidraw node (e.g. /dev/hidraw3)")
     parser.add_argument("--list", action="store_true", help="list matching hidraw devices and exit")
@@ -1604,7 +1763,7 @@ def parse_args(argv=None):
     parser.add_argument("--json", action="store_true", help="print JSON lines instead of text")
     parser.add_argument("--verbose", action="store_true", help="extra diagnostics to stderr")
     parser.add_argument("--force", action="store_true", help="apply sound profiles even when they were exported for a different device name")
-    parser.add_argument("--dry-run", action="store_true", help="print what scene/EQ options would write without touching the device")
+    parser.add_argument("--dry-run", action="store_true", help="print what scene/EQ/noise options would write without touching the device")
     parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
 
     lighting = parser.add_argument_group("lighting (writes settings and exits)")
@@ -1660,9 +1819,20 @@ def parse_args(argv=None):
     eq.add_argument("--eq-mixture", type=int, choices=(0, 1), metavar="0|1", help="advanced: reverb-mix flag in an exported profile (default: preset value, else 0)")
     eq.add_argument("--eq-level", type=int, metavar="N", help="advanced: reverb level in an exported profile (default: preset value, else 0)")
 
+    noise = parser.add_argument_group("noise reduction (writes settings and exits)")
+    noise.add_argument("--noise", choices=("on", "off"), help="turn the mic's noise reduction on or off")
+    noise.add_argument(
+        "--noise-level",
+        metavar="LEVEL",
+        help="noise-cancellation strength: gentle | balanced | aggressive "
+        "(aliases: soft/mid/strong), or the raw 0-2 register value",
+    )
+    noise.add_argument("--noise-status", action="store_true", help="read and print the current noise-reduction state and level")
+
     args = parser.parse_args(argv)
     _validate_lighting(parser, args)
     _validate_eq(parser, args)
+    _validate_noise(parser, args)
     return args
 
 
@@ -1699,6 +1869,45 @@ def run_lighting(args) -> int:
         os.close(fd)
 
 
+def run_noise_dry(args) -> int:
+    """Print the noise-reduction writes a real run would send, without opening the device."""
+    print_writes(plan_noise(args), args.json, prefix="dry-run ")
+    return 0
+
+
+def run_noise(args) -> int:
+    """Apply --noise* writes and/or read back the noise-reduction state (one-shot)."""
+    fd, device, read_only = open_device(args)
+    try:
+        print(f"[info] using {describe(device)}", file=sys.stderr)
+        if noise_requested(args):
+            if read_only:
+                raise DeviceError(
+                    "noise control needs write access to the hidraw node "
+                    "(try sudo or add a udev rule; see README)"
+                )
+            writes = plan_noise(args)
+            for key, value, label in writes:
+                if args.verbose:
+                    print(f"[write] 0x{key:04x} <= {value:#06x}   ({label})", file=sys.stderr)
+                send_frame(fd, write_value(key, value), args.report_id)
+                time.sleep(NOISE_WRITE_SPACING)
+            print_writes(writes, args.json)
+        if args.noise_status:
+            status = read_noise_status(fd, args, args.wait, read_only)
+            if not any(values for values in status.values()):
+                print(
+                    "no noise data received (needs write access for probes? try sudo; "
+                    "or use --raw to inspect traffic)",
+                    file=sys.stderr,
+                )
+                return 2
+            print_noise_status(status, args.json)
+        return 0
+    finally:
+        os.close(fd)
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     try:
@@ -1714,6 +1923,15 @@ def main(argv=None) -> int:
         if lighting_requested(args) or args.light_status:
             try:
                 return run_lighting(args)
+            except DeviceLost as exc:
+                print(f"[warn] {exc}", file=sys.stderr)
+                return 1
+
+        if noise_requested(args) or args.noise_status:
+            if args.dry_run and noise_requested(args) and not args.noise_status:
+                return run_noise_dry(args)
+            try:
+                return run_noise(args)
             except DeviceLost as exc:
                 print(f"[warn] {exc}", file=sys.stderr)
                 return 1

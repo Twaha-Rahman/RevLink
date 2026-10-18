@@ -194,7 +194,8 @@ not resolved. **[unknown]**
 | `0x42` | `FUN_180052760` | u16 value: **low byte = TX1 battery, high byte = TX2 battery**; logs `#### Battery TX1:` / `Battery TX2 :`; stored into props `0x2a` / `0x2b` |
 | `0x49` | `FUN_180053550` (`DataCenter::ProcessCharge`) | u16 value: **low byte = TX1 charge state, high byte = TX2 charge state**; logs `DataCenter::ProcessCharge`; stored into props `0x2d` / `0x2e` |
 | `0x20b3` / `0x28b3` | dispatcher → `DataCenter::FetchAllInitPamaras(mode 2)` | "Get Ready" from TX1 / TX2; host then runs the full init sequence |
-| `0x2084` / `0x2884` / `0x3084` | parser special-case | when value == 1, DLL replies with an ACK frame |
+| `0x2084` / `0x2884` / `0x3084` | parser special-case; §11 | noise-reduction state (1 = on); when value == 1, DLL replies with an ACK frame |
+| `0x2085` / `0x2885` / `0x3085` | §11 | noise-reduction level: 0/1/2 = gentle/balanced/aggressive |
 | `0x41` | `FUN_180053d70` | (used in mode-1 init; likely also a "ready"/state key) |
 | `0x44` | `FUN_180056040` | ~10 Hz streamed meter value: **audio input level** (drives `MainLevelWidget`, the VU meter; strings `refreshLevelWidget`, `-48dB`, `0dB`); stored as param `0x09` with `low byte = TX1, high byte = TX2` |
 | `0x45, 0x46, 0x47` | various | device status/info keys (not battery) |
@@ -343,6 +344,13 @@ Checksum template for arbitrary key `K` single read:
    with cmd-4 / chunked cmd-6 reads, and written values round-trip unchanged.
    Still to confirm: the audible effect, the exact trigger for mode-word
    bit 15 (SevenEQ), and whether `0x2082`/`0x2083` really drive a reverb mix.
+10. **Noise reduction (§11)** — resolved from the app's UI code: the page's "NR"
+    widget (toggle + gentle/balanced/aggressive) maps to props `0xd`/`0xe` and
+    to the wire keys `0x2084`/`0x2085` (TX1), `0x2884`/`0x2885` (TX2) and
+    `0x3084`/`0x3085` (RX), written as cmd-3 pairs. Still to confirm on
+    hardware: the polarity (`1` = on), the 0-based level encoding, and what the
+    RX copies do. The app's separate "AI denoise" panel is host-side
+    (`aiservices.exe`) and only ever writes `0` to these registers.
 
 ## 7. Evidence index (VAs)
 
@@ -388,6 +396,14 @@ path 0x1800641b0 · per-device registration 0x180069d30 · RX/TX map insert
 0x180068f50 · custom-color count handler 0x180068270 · ×100 encoder
 0x18006d860 / ÷100 0x18006d890 / ×10+2000 0x18006d840 · watched-key list
 0x180067ba0 · wrapper index/type setters 0x1800640c0 / 0x1800640d0.
+
+`PD200XW.dll` — noise reduction (§11): page ctor 0x1800215e0 (NR widget
+`page+0x158`) · toggle slot 0x18002a740 (prop `0xd`) · level slot 0x18002a910
+(prop `0xe`) · option strings 0x180086738 / 0x180086740 / 0x180086748 ·
+UI→wire writer 0x180069480 · key↔prop map 0x180069d30 / insert 0x180068f50 ·
+event clear `FUN_18005be20` · AI-switch param map `FUN_180051ed0` ·
+widget class `MaonoControlStandard.dll!MainToggleOptionGroupWidget`
+(`changeChooseBtn` RVA 0x94fe0, `changeToggleState` RVA 0x97010, exported).
 
 ## 8. Hardware verification notes (2026-10-17)
 
@@ -698,3 +714,99 @@ curve registers plus `0x2082`/`0x2083`.
 `--channel 1|2|both` selects the `0x20xx`/`0x28xx` key spaces as for
 lighting. The band block read is chunked because a type-6 answer must fit one
 64-byte report (11 + 2×count bytes ⇒ ≤26 values).
+
+## 11. Noise reduction — the "NR" control
+
+Besides the app's **host-side AI denoise** (a Windows service feature, §11.3),
+the mic has a **device-side noise canceller with three stages** — the app's
+product page exposes it as a toggle plus three option buttons.
+
+### 11.1 UI wiring
+
+* The page ctor (`FUN_1800215e0`) configures a
+  `MAONOCONTROL::MainToggleOptionGroupWidget` (`page+0x158`) with the label `NR`
+  and three option strings, translated via `QMetaObject::tr` from UTF-8 `.rdata`:
+
+  | Index | String | Address | Meaning |
+  |---|---|---|---|
+  | 0 | 轻柔 | `0x180086738` | gentle |
+  | 1 | 均衡 | `0x180086740` | balanced |
+  | 2 | 激进 | `0x180086748` | aggressive |
+
+  The neighbouring strings (`0x180086720`, `0x180086730`) belong to the page's
+  "Gain and Volume" slider (`增益和音量`, values `0`/`20`) that follows in the
+  same ctor.
+* The widget's signals are captured by page lambdas that build a one-entry
+  parameter map and emit it to the `DataCenter`:
+  `sig_ToggleState_Changed` → prop `0xd` (u32 bool, `0x18002a740`) and
+  `sig_buttonChoose_Changed` → prop `0xe` (int option index, `0x18002a910`).
+* The generic UI→wire writer (`FUN_180069480`, the slot analyzer) looks the
+  property id up in the per-slot key↔property map (`FUN_180069d30`, insert
+  `FUN_180068f50`) and sends a **cmd-3 write of `(wire key, toInt(value))`**.
+  For the NR properties no double/string re-encoding applies, so the value goes
+  out unchanged.
+
+### 11.2 Register map
+
+| Register | Offset | TX1 | TX2 | RX (dongle) | Prop | Meaning |
+|---|---|---|---|---|---|---|
+| NR state | `+0x84` | `0x2084` | `0x2884` | `0x3084` | `0xd` | `1` = noise reduction on, `0` = off |
+| NR level | `+0x85` | `0x2085` | `0x2885` | `0x3085` | `0xe` | `0` / `1` / `2` = gentle / balanced / aggressive |
+
+* The property ids are reused per slot: the map is (re)built for the currently
+  selected device (TX1/TX2/RX), so the one page widget drives whichever slot is
+  active. All three slots carry NR registers.
+* Examples (cmd-3 single pairs):
+
+  ```
+  NR on (TX1):      C4 0B 00 00 03 84 20 01 00 89 FE
+  level gentle:     C4 0B 00 00 03 85 20 00 00 89 FE
+  NR on (TX2):      C4 0B 00 00 03 84 28 01 00 81 FE
+  ```
+* At connect the app reads both registers back (`cmd4 readList 0x2084 0x2085 …`,
+  §4) and pushes them into the widget via `changeToggleState` /
+  `changeChooseBtn` (`FUN_18002c960`, apply types `0xd`/`0xe`).
+* The level is **0-based**: the widget uses the device value as a direct
+  0-based index into its option list and the write path sends the chosen index
+  unchanged, so device value == 轻柔/均衡/激进 index. **[not hardware-verified]**
+
+### 11.3 Interaction with the app's host-side "AI denoise"
+
+The app (not the mic) also offers an AI panel — AI denoise, echo cancellation,
+voice change and monitoring — implemented by a Windows service
+(`aiservices.exe`, 77 MB, output device "Maono AI Microphone"). Per-product
+switch keys such as `PD200WNoiseSwitch` are exchanged with the product module as
+`AIDenoiseSwitch` / `AIVoiceSwitch`.
+
+While those switches are on, the module keeps the **device** NR off:
+
+* `DataCenter::UpdateParamMap` (`FUN_180051ed0`) writes `0x2084 = 0` /
+  `0x2884 = 0` / `0x3084 = 0` through `FUN_18005be20` whenever the AI flags
+  (`+0x69`/`+0x68`) are set — both from the window-complete path and from init
+  (§4). It never writes `1`.
+* The parser (`FUN_1800455e0`) answers an incoming `(0x2084|0x2884|0x3084, 1)`
+  pair with a cmd-3 ACK that writes the same key = **0**, but only when those
+  AI flags are set — i.e. a device-side "NR changed" notification is cleared
+  while host AI processing is active.
+
+So the `1` values on these registers come from the page widget (and from the
+device itself); the AI panel feature is host-side and not reachable over this
+HID protocol.
+
+### 11.4 CLI mapping
+
+| CLI option | Wire writes |
+|---|---|
+| `--noise on\|off` | `+0x84` = 1 / 0 per mic |
+| `--noise-level gentle\|balanced\|aggressive` (aliases `soft`/`mid`/`strong`, or raw `0-2`) | `+0x85` = 0 / 1 / 2 per mic |
+| `--noise-status` | cmd-4 single reads of `+0x84` and `+0x85` per mic |
+| `--channel 1\|2\|both` | selects the `0x20xx`/`0x28xx` key space |
+| `--dry-run` | prints the frames without opening the device |
+
+The RX slot's own copies (`0x3084`/`0x3085`) are not exposed: the CLI only
+speaks the TX key spaces, like lighting and EQ. Whether the RX registers mirror
+the mics or hold a dongle-side NR setting is unresolved. **[unknown]**
+
+**[unverified]** — the polarity (`1` = on), the 0-based level encoding and the
+wired mic's behaviour are taken from the app's UI code but have not been
+confirmed on hardware yet; `--noise-status` is the quickest way to check.

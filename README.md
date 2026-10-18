@@ -87,6 +87,25 @@ Verified on hardware: the scene/band writes round-trip unchanged, and
 `--eq-status` reads the mode word, the reverb registers and all seven EQ
 slots back from the device.
 
+### Noise reduction
+
+The mic's three-stage noise canceller (the app page's "NR" control) can be
+configured with `--noise*` options:
+
+```sh
+./revlink.py --noise-status                    # read back state and level
+sudo ./revlink.py --noise on                   # enable (also: --noise off)
+sudo ./revlink.py --noise-level aggressive     # gentle | balanced | aggressive
+sudo ./revlink.py --noise on --noise-level balanced --channel both
+```
+
+`--noise-level` also accepts the aliases `soft`/`mid`/`strong` and the raw
+`0-2` register value. The registers come from the app's UI write path (§11 in
+`docs/protocol.md`) and are **not hardware-verified yet** — `--dry-run` prints
+the exact frames a real run would send. The "AI denoise" entry in the app's AI
+panel is a separate Windows-side service feature and is not reachable over this
+protocol.
+
 ### Device access
 
 `/dev/hidraw*` nodes are root-only by default. Either run with `sudo` or add a
@@ -111,7 +130,8 @@ python3 -m unittest discover -s tests
 
 - [`docs/protocol.md`](docs/protocol.md) — reverse-engineered protocol
   reference: HID interface, frame format, commands, key registry, init
-  sequence, battery handling, lighting control, and scene/PEQ registers.
+  sequence, battery handling, lighting control, scene/PEQ registers and noise
+  reduction.
 
 No vendor binaries are tracked in this repository (see `.gitignore`).
 
@@ -120,8 +140,8 @@ No vendor binaries are tracked in this repository (see `.gitignore`).
 Reverse engineering of the **Maono PD200W** wireless microphone's USB HID
 protocol (as implemented by the Windows "Maono Link" app), with **RevLink**, a
 small Linux CLI that shows the live battery status of the microphones (TX1 /
-TX2) via the RX dongle, controls the mic's RGB LED ring and selects the app's
-scene presets and seven-point PEQ.
+TX2) via the RX dongle, controls the mic's RGB LED ring, its three-stage noise
+canceller and the app's scene presets and seven-point PEQ.
 
 > **Disclaimer:** this is an unofficial, independent project; it is not
 > affiliated with or endorsed by Maono. "Maono", "Maono Link" and "PD200W"

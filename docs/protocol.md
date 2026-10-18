@@ -797,9 +797,9 @@ HID protocol.
 
 | CLI option | Wire writes |
 |---|---|
-| `--noise on\|off` | `+0x84` = 1 / 0 per mic |
-| `--noise-level gentle\|balanced\|aggressive` (aliases `soft`/`mid`/`strong`, or raw `0-2`) | `+0x85` = 0 / 1 / 2 per mic |
-| `--noise-status` | cmd-4 single reads of `+0x84` and `+0x85` per mic |
+| `--noise-reduction on\|off` | `+0x84` = 1 / 0 per mic |
+| `--noise-reduction-level gentle\|balanced\|aggressive` (aliases `soft`/`mid`/`strong`, or raw `0-2`) | `+0x85` = 0 / 1 / 2 per mic |
+| `--noise-reduction-status` | cmd-4 single reads of `+0x84` and `+0x85` per mic |
 | `--channel 1\|2\|both` | selects the `0x20xx`/`0x28xx` key space |
 | `--dry-run` | prints the frames without opening the device |
 
@@ -809,4 +809,4 @@ the mics or hold a dongle-side NR setting is unresolved. **[unknown]**
 
 **[unverified]** — the polarity (`1` = on), the 0-based level encoding and the
 wired mic's behaviour are taken from the app's UI code but have not been
-confirmed on hardware yet; `--noise-status` is the quickest way to check.
+confirmed on hardware yet; `--noise-reduction-status` is the quickest way to check.

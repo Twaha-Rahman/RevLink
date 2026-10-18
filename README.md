@@ -90,21 +90,21 @@ slots back from the device.
 ### Noise reduction
 
 The mic's three-stage noise canceller (the app page's "NR" control) can be
-configured with `--noise*` options:
+configured with `--noise-reduction*` options:
 
 ```sh
-./revlink.py --noise-status                    # read back state and level
-sudo ./revlink.py --noise on                   # enable (also: --noise off)
-sudo ./revlink.py --noise-level aggressive     # gentle | balanced | aggressive
-sudo ./revlink.py --noise on --noise-level balanced --channel both
+./revlink.py --noise-reduction-status                    # read back state and level
+sudo ./revlink.py --noise-reduction on                   # enable (also: off)
+sudo ./revlink.py --noise-reduction-level aggressive     # gentle | balanced | aggressive
+sudo ./revlink.py --noise-reduction on --noise-reduction-level balanced --channel both
 ```
 
-`--noise-level` also accepts the aliases `soft`/`mid`/`strong` and the raw
-`0-2` register value. The registers come from the app's UI write path (§11 in
-`docs/protocol.md`) and are **not hardware-verified yet** — `--dry-run` prints
-the exact frames a real run would send. The "AI denoise" entry in the app's AI
-panel is a separate Windows-side service feature and is not reachable over this
-protocol.
+`--noise-reduction-level` also accepts the aliases `soft`/`mid`/`strong` and
+the raw `0-2` register value. The registers come from the app's UI write path
+(§11 in `docs/protocol.md`) and are **not hardware-verified yet** — `--dry-run`
+prints the exact frames a real run would send. The "AI denoise" entry in the
+app's AI panel is a separate Windows-side service feature and is not reachable
+over this protocol.
 
 ### Device access
 

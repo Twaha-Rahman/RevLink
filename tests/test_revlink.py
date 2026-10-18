@@ -227,25 +227,25 @@ class NoiseTests(unittest.TestCase):
         self.assertEqual(rl.single_read(0x2084), bytes.fromhex("c40900000484208bfe"))
 
     def test_plan_noise_basic(self):
-        args = rl.parse_args(["--noise", "on", "--noise-level", "aggressive"])
+        args = rl.parse_args(["--noise-reduction", "on", "--noise-reduction-level", "aggressive"])
         self.assertEqual(
             rl.plan_noise(args),
-            [(0x2084, 1, "noise=on"), (0x2085, 2, "noise-level=aggressive(2)")],
+            [(0x2084, 1, "noise-reduction=on"), (0x2085, 2, "noise-reduction-level=aggressive(2)")],
         )
         self.assertEqual(rl.plan_noise(rl.parse_args([])), [])
         self.assertEqual(
-            rl.plan_noise(rl.parse_args(["--noise", "off"])),
-            [(0x2084, 0, "noise=off")],
+            rl.plan_noise(rl.parse_args(["--noise-reduction", "off"])),
+            [(0x2084, 0, "noise-reduction=off")],
         )
 
     def test_plan_noise_channels(self):
         self.assertEqual(
-            rl.plan_noise(rl.parse_args(["--noise-level", "gentle", "--channel", "2"])),
-            [(0x2885, 0, "noise-level=gentle(0)")],
+            rl.plan_noise(rl.parse_args(["--noise-reduction-level", "gentle", "--channel", "2"])),
+            [(0x2885, 0, "noise-reduction-level=gentle(0)")],
         )
         self.assertEqual(
-            rl.plan_noise(rl.parse_args(["--noise", "on", "--channel", "both"])),
-            [(0x2084, 1, "noise=on"), (0x2884, 1, "noise=on")],
+            rl.plan_noise(rl.parse_args(["--noise-reduction", "on", "--channel", "both"])),
+            [(0x2084, 1, "noise-reduction=on"), (0x2884, 1, "noise-reduction=on")],
         )
 
     def test_parse_noise_level(self):
@@ -268,23 +268,23 @@ class NoiseTests(unittest.TestCase):
 
     def test_noise_status_record(self):
         record = rl.noise_status_record({rl.NOISE_STATE_OFF: 1, rl.NOISE_LEVEL_OFF: 0})
-        self.assertEqual(record["noise"], 1)
-        self.assertEqual(record["noise_name"], "on")
+        self.assertEqual(record["noise_reduction"], 1)
+        self.assertEqual(record["noise_reduction_name"], "on")
         self.assertEqual(record["level"], 0)
         self.assertEqual(record["level_name"], "gentle")
-        self.assertIsNone(rl.noise_status_record({})["noise"])
-        self.assertIsNone(rl.noise_status_record({}).get("noise_name"))
+        self.assertIsNone(rl.noise_status_record({})["noise_reduction"])
+        self.assertIsNone(rl.noise_status_record({}).get("noise_reduction_name"))
 
     def test_noise_validation_errors(self):
         bad_argv = (
-            ["--noise-level", "3"],
-            ["--noise-level", "loud"],
-            ["--noise", "on", "--watch"],
-            ["--noise-status", "--watch"],
-            ["--noise", "on", "--light", "off"],
-            ["--noise-status", "--light-status"],
-            ["--noise", "on", "--scene", "game"],
-            ["--noise-level", "gentle", "--eq-status"],
+            ["--noise-reduction-level", "3"],
+            ["--noise-reduction-level", "loud"],
+            ["--noise-reduction", "on", "--watch"],
+            ["--noise-reduction-status", "--watch"],
+            ["--noise-reduction", "on", "--light", "off"],
+            ["--noise-reduction-status", "--light-status"],
+            ["--noise-reduction", "on", "--scene", "game"],
+            ["--noise-reduction-level", "gentle", "--eq-status"],
         )
         with contextlib.redirect_stderr(io.StringIO()):
             for argv in bad_argv:
@@ -300,11 +300,14 @@ class NoiseTests(unittest.TestCase):
         try:
             out = io.StringIO()
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-                code = rl.main(["--noise", "on", "--noise-level", "gentle", "--dry-run"])
+                code = rl.main(["--noise-reduction", "on", "--noise-reduction-level", "gentle", "--dry-run"])
             self.assertEqual(code, 0)
             self.assertEqual(
                 out.getvalue().splitlines(),
-                ["dry-run 0x2084 <= 1   noise=on", "dry-run 0x2085 <= 0   noise-level=gentle(0)"],
+                [
+                    "dry-run 0x2084 <= 1   noise-reduction=on",
+                    "dry-run 0x2085 <= 0   noise-reduction-level=gentle(0)",
+                ],
             )
         finally:
             rl.open_device = original
